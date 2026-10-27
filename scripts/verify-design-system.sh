@@ -298,6 +298,12 @@ if errors:
     sys.exit(1)
 print(f"  ✓ {len(schemas)} customisable widgets declare {sum(map(len, schemas.values()))} valid option fields")
 PY
+# Implementation guardrails (docs/lld/03-guardrails.md): the linter proves its own rules, then lints shell/ when it exists
+python3 scripts/lint-shell.py --self-test
+python3 scripts/lint-shell.py
+if [ -d tests/lib ]; then
+  node --test tests/lib/
+fi
 echo "  ✓ Accessibility modes, input safety, polygon catalog, configurable bars, and shell-state protections are in place"
 
 # 7. Verify the matugen pipeline (template ↔ baseline ↔ ColorTokens adapter parity, non-interactive config)

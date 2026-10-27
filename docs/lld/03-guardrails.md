@@ -1,0 +1,154 @@
+# LLD 03 — Guardrails
+
+Three kinds of rule:
+- **G** rules are enforced by `scripts/lint-shell.py`.
+- **R** rules are checked by the reviewer.
+- **C** rules resolve contradictions between spec files.
+
+A change that breaks a G or R rule is rejected even when its tests pass.
+
+---
+
+## 1. Lint-Enforced Rules (`python3 scripts/lint-shell.py`)
+
+| ID | Rule | Fix |
+|---|---|---|
+| G01 | No colour literals (`"#…"`, `Qt.rgba/hsla/darker/lighter`, named colours) outside `MatShell/Tokens` | `Tokens.color.<role>`, `surfaceTier(n)`, `withAlpha(c, a)`; `"transparent"` is allowed |
+| G02 | No numeric `radius`/`cornerRadius` | `Tokens.shape.<token>`, `morphPillRadius()`, `morphTileRadius()`, or a derived value (`height / 2`) |
+| G03 | No pixel literals in size, spacing, margin, or padding | `Tokens.metrics.<token>` or a value derived from one; a spec value with no token may use `// lint-allow G03: <spec §ref>` in **one** file |
+| G04 | No `font.pixelSize`/`pointSize` numbers or `font.family` strings | `Tokens.typography.<role>.family` / `.pixelSize` / `.weight` |
+| G05 | No `duration`, `spring`, `damping`, or `epsilon` literals | `Tokens.motion.*` |
+| G06 | Every `PanelWindow` sets `WlrLayershell.namespace` (starting `"mat-"`), `.layer`, and `.keyboardFocus` | Copy the row from `01-architecture.md` §4 |
+| G07 | No `Window`/`ApplicationWindow`; `FloatingWindow` only under `surfaces/settings/` | `PanelWindow`, `PopupWindow`, `WlSessionLock` |
+| G08 | `Process`, `FileView`, sockets, and D-Bus objects only in `MatShell/Services` (and `ColorTokens`) | Add or extend a service function |
+| G09 | Spatial properties (`x y width height implicit* scale radius rotation`) never animate with `NumberAnimation`/`PropertyAnimation`/`SmoothedAnimation` | `SpringAnimation` with `Tokens.motion.spring*Spatial` |
+| G10 | Every `Behavior on <spatial>` sets `enabled: Tokens.motion.spatialMotionEnabled` | Add the gate |
+| G11 | Every `Timer` binds `running:` to a condition (never missing, never `true`) | `running: root.visible && …` |
+| G12 | No raw `MouseArea` outside primitives | Compose `M3Surface`/`M3Button`/`M3BarPill`/… or use `TapHandler` inside a primitive |
+| G13 | Bar widgets never read `options.<key>` | `opt.<key>` from `BarWidgetRegistry.resolve(...)` |
+| G14 | `Text` that shows a live number sets `font.features: Tokens.typography.tabularFeatures` | Add the line |
+| G15 | Imports only from the allowlist; `QtQuick.Controls*` banned | Use primitives |
+| G16 | No HTML/CSS/React idioms (`className`, `document.`, `onClick=`, `div`, `"…px"`, `display: flex`) | QtQuick layouts, anchors, handlers |
+| G17 | Primitives reference no service except `BarService`, `KeyboardService` (and `ShellState`) | Pass data in through properties |
+| G18 | No `console.log` | `console.warn("mat-shell: …")` for real problems; otherwise remove |
+| G19 | `M3IconButton` and `M3BarPill` instances set `accessibleName` | Add a name (the tooltip falls back to it) |
+| G20 | `lib/*.mjs` contains no `Qt`, `Quickshell`, `Tokens`, or `console.log` | Pass values in as arguments |
+
+Suppression syntax: `// lint-allow Gxx: <reason, 10+ characters, cite the spec>`. It works on that line only, and each one is listed in the hand-off. A suppression for G06, G07, G08, G15, G17 or G20 is always rejected.
+
+---
+
+## 2. Review Rules
+
+| ID | Rule |
+|---|---|
+| R01 | Never hand-edit generated files: `shell/MatShell/Tokens/*`, `shell/lib/generated/*`. Change the source and run `scripts/gen-shell-data.py`. |
+| R02 | One task per commit, and only the files the task lists. Unrelated refactors are rejected. |
+| R03 | Tests come first. Never delete, skip, or loosen an assertion, a lint fixture, or an `expect:` line to make a change pass. |
+| R04 | No new dependencies: no npm packages, Qt modules, or CLI tools beyond those named in the specs or this LLD. |
+| R05 | State drives windows: `visible`, layer, and focus are bindings to `ShellState`/service properties. No imperative `show()`/`hide()` from other files. |
+| R06 | `Process.command` is an argument array. Use `["sh", "-c", script, "sh", arg1, …]` only when the spec's command has a pipe, and pass every variable (paths, SSIDs, notification text, clipboard ids) as a positional argument (`"$1"`), never by string interpolation. |
+| R07 | Pollers and timers run only while a visible consumer needs them (`interactions/03` §2.3). Hidden widgets, closed popovers, and a locked session cost zero wakeups. |
+| R08 | Secrets: passwords go only to `PamContext.respond()` or the polkit agent. They never appear on a command line, in a log, in `config.json`, or in a property that outlives the attempt, and the field is cleared after every attempt. `respond()` is called only from `onResponseRequiredChanged`. |
+| R09 | The power menu shows no prose: no title, row labels, or status line (`11-power-and-session-menu.md` §1). Text goes to `Accessible` only. |
+| R10 | Middle-click, scroll, and modifier+scroll are accelerators: never destructive, never the only path. Right-click always opens a menu. |
+| R11 | Every interactive element is keyboard reachable (`activeFocusOnTab`), activates on Enter/Space, and has an `Accessible.name`. The focus ring shows only when `Tokens.keyboardModality` is true. |
+| R12 | Hover never changes a widget's width. Width changes the user did not cause wait until 400ms after the pointer leaves, except the privacy and recording pills, which appear immediately. |
+| R13 | Colour is never the only cue. Pair it with shape, fill, icon, or text (it must still read under `scheme-monochrome`). |
+| R14 | `reducedMotion`, `reducedTransparency`, `highContrast`, `textScale`, `confirmByHold`, `expressiveSprings`, and `desktopMode` apply live, without a restart. Key bindings never depend on `desktopMode`. |
+| R15 | Bars are data. Never assume a bar edge, height, or count; place surfaces with `BarService.insets(screen)` or `maxInsets(screen)` and `ExclusionMode.Ignore`. |
+| R16 | Security indicators always have a home. If no visible bar on a screen hosts `privacy` or `recording`, `PrivacyFallback` shows the pill while capture is active. |
+| R17 | Core actions (`toggleLauncher`, `openSettings`, `togglePower`) stay bound even with zero bars; Settings can rebind but never unbind them. |
+| R18 | matugen never prompts: every run passes `--source-color-index 0`, and previews add `--dry-run`. A non-zero exit keeps the previous `theme.json` and surfaces the stderr. |
+| R19 | Config is written only through `ConfigService`. Widget options store only non-default values. Unknown keys and unknown widget types are preserved on save. |
+| R20 | QML `var` properties do not notify on in-place mutation: always assign a new object or array (`config = next`), never `config.bars.push(…)`. |
+| R21 | The only network access is `WeatherService` (wttr.in). No telemetry, analytics, or remote fonts. |
+| R22 | Never log notification bodies, clipboard contents, passwords, or Wi-Fi keys. |
+| R23 | Text on the bare wallpaper follows the Legibility Guard (`foundations/01` §5): hero text ≥ 45px only, otherwise a Tier 1 backplate. |
+| R24 | `Accessible.announce()` is used for OSD changes, toast arrival, auth errors, and hold-to-confirm hints, exactly where the specs ask. |
+| R25 | No placeholders in committed code: no `TODO`, `FIXME`, `TBD`, stub functions, or skeleton handlers that just close the surface (`verify-design-system.sh` checks the docs; the reviewer checks the code). |
+
+---
+
+## 3. Spec Conflict Resolutions
+
+| ID | Conflict | Resolution |
+|---|---|---|
+| C01 | Non-bar surfaces use `exclusiveZone: 0` in some specs and `-1`/`ExclusionMode.Ignore` in others | `exclusionMode: ExclusionMode.Ignore` for every non-bar `PanelWindow`; do not set `exclusiveZone` (`01-architecture.md` §4) |
+| C02 | The `foundations/05` §3.2 bar example sets `exclusiveZone` unconditionally | `barGeometry.exclusiveZone(bar, shown, desktopMode)` |
+| C03 | Theme studio: §1 anchors `bottom, left, right`; the skeleton anchors all four and uses `880×340` | §1 wins: anchors `bottom, left, right`, drawer `min(920, screen.width − 32) × 360` |
+| C04 | Overview: §2 says a 2×5 matrix of `280×158`; the skeleton shows 2×3 at `320×180` | §2 wins |
+| C05 | `NotificationServer` flags: the spec lists five, the skeleton sets three | All five `true`: `bodySupported`, `actionsSupported`, `imageSupported`, `inlineReplySupported`, `persistenceSupported` |
+| C06 | `dndEnabled` exists both in `ShellState` (writable) and `NotificationService` | Source of truth is `config.notifications.dnd`. `NotificationService.dndEnabled` mirrors it, `ShellState.dndEnabled` is read-only, and writes go through `NotificationService.setDnd()` |
+| C07 | Popover ids are snake_case (`control_center`) while widget types are camelCase (`controlCenter`) | Both stay as they are; use the map in `01-architecture.md` §5 |
+| C08 | `privacy` "opens Privacy popover", but there is no such Lane 2 popover | An `M3ContextMenu` listing the capturing apps |
+| C09 | Keybinds go through `qs ipc call` (`interactions/02`) and through Hyprland `global, mat-shell:<action>` (`16-settings.md`) | Hyprland: `GlobalShortcut { appid: "mat-shell" }` in `ShellState` plus `binds.conf`; Niri/Sway/scripts: `qs -c mat-shell ipc call` |
+| C10 | `02-bar-widgets.md` §2.1 says "ascending priority (1 first)", but §1.1 marks `telemetry` (5) as "hidden first" | Highest number collapses first (`overflow.mjs`): telemetry (5) → tray / keyboardLayout / settings (4) → media / widgetPeek (3) → search (2) → windowTitle (1). **Confirm with the design owner**; the order lives in `widgetCatalog.mjs` only |
+| C11 | The launcher skeleton hardcodes scrim alpha `0.38` | `Tokens.metrics.scrimAlpha` |
+| C12 | The polkit skeleton's Authenticate only closes the modal | Full flow through `PolkitService` (`Quickshell.Services.Polkit`) |
+| C13 | `M3Slider` muted track is `surfaceVariant` in code and `onSurface @38%` in the table | Table wins |
+| C14 | `M3PolygonSurface` never sets `keyboardModality`, so its focus ring cannot show | Set `Tokens.keyboardModality = true` on Tab/arrows like `M3Surface` |
+| C15 | `foundations/04` says "all four switches" but lists five | Five a11y switches (`reducedMotion`, `reducedTransparency`, `highContrast`, `textScale`, `confirmByHold`) plus `expressiveSprings` under Animations |
+| C16 | The `mode` IPC target has no owner | `ShellState` (`01-architecture.md` §7.3) |
+| C17 | `telemetry` opens a "Control Center telemetry page" that SC-03 does not define | Opens `control_center`; a telemetry sub-sheet is a separate, later spec change |
+| C18 | `BluetoothService` and `CaptureService` are referenced but not in the service catalogue; `powerprofilesctl` is used although `PowerProfiles` exists | Defined in `02-contracts.md` §3.2 (`Quickshell.Bluetooth`, `PowerProfiles`) |
+| C19 | Specs say Quickshell ≥ 0.2 | LLD floor is 0.3.0 (Polkit, `FloatingWindow` title); test on 0.3.2 |
+| C20 | `interactions/03` and `AGENTS.md` place services in `shell/services/` and tokens in `shell/tokens/` | `shell/MatShell/Services/` and `shell/MatShell/Tokens/` (`01-architecture.md` §1) |
+
+---
+
+## 4. Common Mistakes (check your diff for each)
+
+| Mistake | Symptom | Do instead |
+|---|---|---|
+| Inventing an API (`Hyprland.activeWindow`, `Mpris.activePlayer`, `UPower.battery`) | `TypeError` / `undefined` at runtime | Use only §5; otherwise stop (README §4) |
+| Forgetting `PwObjectTracker` | volume reads `0`/`NaN` | `PwObjectTracker { objects: [sink, source] }` in `AudioService` |
+| Expecting `MprisPlayer.position` to update | frozen progress bar | `Timer` calling `positionChanged()` while visible and playing |
+| `anchors.*` on a child of a `RowLayout`/`ColumnLayout` | QML warning, broken layout | `Layout.*` properties |
+| A binding loop (`width` from a child's `implicitWidth` that reads `parent.width`) | "Binding loop detected" in the log | Size from `implicit*` upward only |
+| Mutating `var` arrays/objects in place | UI does not update | Assign a new value (R20) |
+| Untyped `IpcHandler` functions | function missing from `qs ipc show` | Every parameter and return typed (`string`, `int`, `bool`, `real`, `color`) |
+| `running: true` Timer for a clock | battery drain | `SystemClock` with the precision the visible content needs |
+| Popovers that eat clicks over bars | needs two clicks to switch popovers | `mask` subtracting `BarService.regions(screen)` |
+| Reading `Quickshell.screens[0]` for "the" screen | wrong monitor | `CompositorService.focusedScreen` or `modelData` |
+| `qs ipc call …` without `-c mat-shell` | "no running instances" | `qs -c mat-shell ipc call …` |
+| Porting showcase CSS (`box-shadow`, `transition`) | lint G16, wrong motion | Spec tokens and `SpringAnimation` |
+
+---
+
+## 5. Verified Quickshell / Qt API (Quickshell v0.3.2, checked against source at `quickshell-mirror/quickshell` 9b0f339)
+
+Docs: `https://quickshell.org/docs/v0.3.2/types/<Module>/<Type>/`. Always use a **versioned** URL: unversioned links redirect to the outdated v0.1.0 docs.
+
+| Module | Types and members you may use |
+|---|---|
+| `Quickshell` | `ShellRoot`, `Scope`, `Singleton` (+ `pragma Singleton`), `Variants { model; delegate }` with `modelData`, `Quickshell.screens`, `Quickshell.env(name)`, `Quickshell.iconPath(icon[, check \| fallback])`, `Quickshell.shellDir`; `PanelWindow` (`anchors.{top,bottom,left,right}: bool`, `margins.*: int`, `exclusiveZone`, `exclusionMode: ExclusionMode.Normal/Ignore/Auto`, `aboveWindows`, `focusable`, `color`, `implicitWidth/Height`, `screen`, `mask`); `PopupWindow` (`parentWindow`, `relativeX/Y`, `anchor`, `grabFocus`); `FloatingWindow` (`title` ≥ 0.2); attached `QsWindow.window`; `Region` (`item`, `x/y/width/height`, `intersection: Intersection.Combine/Subtract/Intersect/Xor`, `regions`, `shape`, `radius`); `SystemClock` (`precision: SystemClock.Hours/Minutes/Seconds`, `date`, `hours`, `minutes`, `seconds`, `enabled`); `DesktopEntries` (`applications` ObjectModel → `.values`, `byId(id)`, `heuristicLookup(name)`); `DesktopEntry` (`name`, `genericName`, `comment`, `icon`, `actions`, `execute()`) |
+| `Quickshell.Wayland` | attached `WlrLayershell.layer` (`WlrLayer.Background/Bottom/Top/Overlay`), `.namespace`, `.keyboardFocus` (`WlrKeyboardFocus.None/Exclusive/OnDemand`); `WlSessionLock` (`locked`, `secure`) + `WlSessionLockSurface`; `ToplevelManager.toplevels`, `.activeToplevel`; `Toplevel` (`title`, `appId`, `activated`, `activate()`, `close()`); `ScreencopyView` (`captureSource`, `live`, `paintCursor`, `captureFrame()`) |
+| `Quickshell.Hyprland` | `Hyprland` (`workspaces`, `focusedWorkspace`, `focusedMonitor`, `monitors`, `toplevels`, `activeToplevel`, `dispatch(string)`, `monitorFor(screen)`, signal `rawEvent(HyprlandEvent)` with `name`, `data`, `parse(n)`); `GlobalShortcut` (`appid` (default `"quickshell"`), `name`, `description`, `triggerDescription`, signals `pressed()`/`released()`); bind line `bind = <mods>, <key>, global, <appid>:<name>` |
+| `Quickshell.Io` | `Process` (`command`, `running`, `environment`, `stdout`/`stderr` ← `StdioCollector { text }` or `SplitParser { onRead }`, signal `exited(exitCode, exitStatus)`, `startDetached()`, `signal(int)`, `write()`, `exec()`); `FileView` (`path`, `watchChanges`, `atomicWrites`, `blockLoading`, `text()`, `setText()`, signal `fileChanged()`, `adapter`, `writeAdapter()`); `JsonAdapter`, `JsonObject`; `IpcHandler` (`target`; functions with ≤ 10 explicitly typed args of `string/int/bool/real/color`, returns `void/string/int/bool/real/color`) |
+| `Quickshell.Services.Pipewire` | `Pipewire.defaultAudioSink`, `.defaultAudioSource`, `.nodes`; `PwObjectTracker { objects }`; `PwNode` (`audio.volume`, `audio.muted`, `isSink`, `isStream`) |
+| `Quickshell.Services.UPower` | `UPower.displayDevice` (`percentage` **0..1**, `timeToEmpty`/`timeToFull` in seconds, `state`); `PowerProfiles` (`profile`) with `PowerProfile.PowerSaver/Balanced/Performance` |
+| `Quickshell.Services.Mpris` | `Mpris.players` (ObjectModel `.values`); `MprisPlayer` (`identity`, `playbackState`, `trackTitle`, `trackArtist`, `trackAlbum`, `trackArtUrl`, `position`, `length`, `canSeek`, `shuffle`, `loopState`, `togglePlaying()`, `next()`, `previous()`, `seek(offset)`, `positionChanged()`); `MprisPlaybackState.Playing` |
+| `Quickshell.Services.SystemTray` | `SystemTray.items`; `SystemTrayItem` (`icon`, `activate()`, `secondaryActivate()`, `scroll()`, `menu`, `hasMenu`, `display(parentWindow, x, y)`) |
+| `Quickshell.Services.Notifications` | `NotificationServer` (`bodySupported`, `actionsSupported`, `imageSupported`, `inlineReplySupported`, `persistenceSupported`, `keepOnReload`, `trackedNotifications`, signal `notification(Notification)`); `Notification` (`tracked`, `urgency`, `dismiss()`, `expire()`, `sendInlineReply(text)`, `actions[].invoke()`); `NotificationUrgency.Low/Normal/Critical` |
+| `Quickshell.Services.Pam` | `PamContext` (`config`, `configDirectory`, `user`, `active`, `message`, `responseRequired`, `start()`, `respond(string)`, `abort()`, signal `completed(PamResult)`); `PamResult.Success/Failed/Error/MaxTries` |
+| `Quickshell.Services.Polkit` (≥ 0.3.0) | `PolkitAgent`: read its doc page before Task 22 and copy the member names into `PolkitService` comments |
+| `Quickshell.Bluetooth` (≥ 0.2.0) | read its doc page before Task 20 and copy the member names into `BluetoothService` comments |
+| Qt | ES-module imports `import "x.mjs" as X` → `X.fn()` (Qt 6); `Accessible.announce(message, politeness)` (Qt ≥ 6.8); `SpringAnimation`, `HoverHandler`, `TapHandler`, `WheelHandler`, `DragHandler`, `MultiEffect` (`QtQuick.Effects`), `Shape` (`QtQuick.Shapes`) |
+
+CLI: `qs -c mat-shell` (or `-p <dir>`) starts the shell; `qs -c mat-shell ipc call <target> <fn> [args]`, `qs -c mat-shell ipc show`, `qs -c mat-shell log -f`. Quickshell itself does not read `QML_IMPORT_PATH`, but its `QQmlEngine` does, so `scripts/run-shell.sh` sets it (Task 1 proves this on the target).
+
+Anything not in this table needs a versioned doc link in your hand-off before you use it.
+
+---
+
+## 6. Definition of Done (tick every line in the hand-off)
+
+- [ ] Only the task's listed files changed; generated files were regenerated, not edited.
+- [ ] The task's tests were written first and seen failing; now `node --test tests/lib/` passes.
+- [ ] `python3 scripts/lint-shell.py` reports zero unsuppressed findings; each suppression cites a spec section.
+- [ ] `./scripts/verify-design-system.sh` prints `ALL CHECKS PASSED`.
+- [ ] QML tasks: `./scripts/smoke-shell.sh` passes on the Linux target, and the task's manual checks were done with the results listed.
+- [ ] Every name matches `02-contracts.md`; every Quickshell API is in §5 or cited.
+- [ ] Keyboard path, `Accessible.name`, focus ring, and Reduced Motion behaviour were checked for every new interactive element.
+- [ ] No R-rule broken; conflicts met are listed by C-id.
