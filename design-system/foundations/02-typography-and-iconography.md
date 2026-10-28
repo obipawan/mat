@@ -13,14 +13,14 @@ Mobile Material 3 uses `16sp` for `bodyLarge` and `14sp` for `bodyMedium`. On de
 
 | Role Token | Font Family | Size (`px`) | Line Height (`px`) | Weight | Tracking (`px`) | Primary Desktop Shell Usage |
 |---|---|---|---|---|---|---|
-| `displayLarge` | `familyDisplay` (`Google Sans`) | `57` | `64` | `600` (DemiBold) | `-0.25` | Lock Screen hero clock (`10-lock-screen.md`) |
+| `displayLarge` | `familyDisplay` (`Google Sans Flex`) | `57` | `64` | `600` (DemiBold) | `-0.25` | Lock Screen hero clock (`10-lock-screen.md`) |
 | `displayMedium` | `familyDisplay` | `45` | `52` | `600` | `0.0` | Weather popover hero temperature (`05-calendar-and-weather.md`) |
 | `displaySmall` | `familyDisplay` | `36` | `44` | `600` | `0.0` | Calendar popover current day/date hero |
 | `headlineLarge` | `familyDisplay` | `32` | `40` | `600` | `0.0` | Welcome / Onboarding modal hero |
 | `headlineMedium` | `familyDisplay` | `28` | `36` | `600` | `0.0` | Power Menu confirmation header (`11-power-and-session-menu.md`) |
 | `headlineSmall` | `familyDisplay` | `24` | `32` | `600` | `0.0` | Calculator live result in Launcher (`08-app-and-command-launcher.md`) |
 | `titleLarge` | `familyDisplay` | `20` | `28` | `600` | `0.0` | Popover section headers (Notification Center title, Theme Studio title) |
-| `titleMedium` | `familySans` (`Google Sans Text`) | `15` | `22` | `600` | `0.1` | Media player track title, Polkit dialog title, Launcher search input |
+| `titleMedium` | `familySans` (`Google Sans Flex`) | `15` | `22` | `600` | `0.1` | Media player track title, Polkit dialog title, Launcher search input |
 | `titleSmall` | `familySans` | `13` | `18` | `600` | `0.1` | Notification card title, Quick Settings sub-sheet header, Calendar month title |
 | `bodyLarge` | `familySans` | `15` | `22` | `400` (Regular) | `0.15` | Launcher item title, Polkit description |
 | `bodyMedium` | `familySans` | `13` | `18` | `400` | `0.15` | Notification body text, Settings list row, Clipboard preview |
@@ -53,6 +53,21 @@ font.features: Tokens.typography.tabularFeatures // ({ "tnum": 1 })
 
 ### 2.3 Large Text Scaling
 Every role in `TypographyTokens` multiplies its `pixelSize` and `lineHeight` by `Tokens.textScale` (`1.0`, `1.15`, `1.3`). Default bar thicknesses (`barThickness`, `dockThickness`, `islandThickness`) grow with it through `MetricTokens.chromeScale`, and a user-set `bar.thickness` is raised to the minimum its widgets' text needs (`BarService.effectiveThickness(bar)`), so labels never clip. Components MUST read sizes from the type roles rather than hardcoding pixel sizes, or Large Text silently breaks.
+
+### 2.4 Font Files and Licences
+
+Every family is open-licensed, so the `mat-shell` package ships the files it needs (`packaging/dependencies.json` → `fonts`, pinned by commit and SHA-256; `python3 scripts/fetch-fonts.py` installs them for development).
+
+| Token | Family | File | Licence | Source |
+|---|---|---|---|---|
+| `familySans`, `familyDisplay` | Google Sans Flex (variable: `wght`, `wdth`, `opsz`, `slnt`, `ROND`) | `GoogleSansFlex[ROND,opsz,slnt,wdth,wght].ttf` | SIL OFL 1.1, no Reserved Font Names | `google/fonts` `ofl/googlesansflex` |
+| `familyEditorial` | Instrument Serif | `InstrumentSerif-Regular.ttf`, `InstrumentSerif-Italic.ttf` | SIL OFL 1.1 | `google/fonts` `ofl/instrumentserif` |
+| `familyIcons` | Material Symbols Rounded (variable: `FILL`, `wght`, `GRAD`, `opsz`) | `MaterialSymbolsRounded[FILL,GRAD,opsz,wght].ttf` | Apache 2.0 | `google/material-design-icons` `variablefont/` |
+| `familyMono` | JetBrains Mono | — (Arch `ttf-jetbrains-mono`, a package dependency) | SIL OFL 1.1 | distribution package |
+
+- Google Sans Flex replaces the earlier Google Sans / Google Sans Text pair, which could not be redistributed. One variable family serves both tokens; the two token names stay so roles keep their meaning.
+- "Google", "Google Sans" and "Google Sans Flex" are Google trademarks (`TRADEMARKS.md` beside the font). Ship the font files unmodified, and never use the names in the product's own name or branding.
+- Optical size: whether Qt applies `opsz` automatically from the pixel size on Linux is checked in Task 11 (runtime spike) with the gallery. Until then no role sets `font.variableAxes` for text; `ROND` and `wdth` stay at their defaults.
 
 ---
 
@@ -109,7 +124,7 @@ To achieve the signature Material 3 Expressive hero aesthetic on **Desktop Clock
    - Hour/minute separation is carried by the gap and the role swap together, so it never depends on hue alone (safe for colour-vision deficiency).
    - Each clock exposes `Accessible.name: "HH:mm"`. The bar `clock` widget (wherever the user placed it) remains the canonical, always-readable time.
 3. **Strict Boundary Rule**:
-   - `familyEditorial` and duotone numerals are **restricted to hero display widgets (`>= 45px`)**. All status bars, notifications, launchers, and settings rows MUST use `familySans` (`Google Sans Text`).
+   - `familyEditorial` and duotone numerals are **restricted to hero display widgets (`>= 45px`)**. All status bars, notifications, launchers, and settings rows MUST use `familySans` (`Google Sans Flex`).
    - Bare hero text on the wallpaper follows the Wallpaper Legibility Guard (`01-color-and-surfaces.md` §5).
 4. **Locale-Safe Dates**: Expressive date badges always pair the day number with an abbreviated month name from `Qt.locale().monthName(month, Locale.ShortFormat)` (`"26"` + `"Oct"`), ordered per `Qt.locale().dateFormat(Locale.ShortFormat)`. Purely numeric day/month badges (`[26][10]`) are forbidden because they read differently across locales.
 

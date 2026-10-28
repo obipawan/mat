@@ -81,7 +81,7 @@ Singleton {
 Process {
     id: matugenRun
     command: ["matugen", "image", root.pendingWallpaper,
-              "-c", Quickshell.env("HOME") + "/.config/mat-shell/matugen/config.toml",
+              "-c", ConfigService.configDir + "/matugen/config.toml", // seeded at start (docs/lld/02-contracts.md §3.2)
               "-t", Tokens.schemeVariant,
               "--source-color-index", "0"]
         .concat(Tokens.highContrast ? ["--contrast", "1.0"] : [])

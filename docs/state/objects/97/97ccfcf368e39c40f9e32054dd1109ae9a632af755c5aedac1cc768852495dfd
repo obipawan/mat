@@ -1,0 +1,388 @@
+# LLD 02 — Interface Contracts
+
+Every name in this file is final. Use it exactly; do not rename, add optional parameters, or "improve" signatures. If you need something that is not here, follow README §4 (stop and ask).
+
+Notation: `fn(a: T, b?: T = default): R`. `Bar`, `Field` and similar types are defined where first used. "Spec:" points to the section that holds the visual and behavioural detail.
+
+---
+
+## 1. Conventions (all layers)
+
+- **No throws on user data.** Functions that read config or command output never throw. They return a usable value plus `warnings: string[]`, or fall back to defaults. Throwing is allowed only for programmer errors (a wrong argument type in a test).
+- **Immutability in `lib/`.** Functions return new objects and never mutate arguments. QML copies a result into properties.
+- **Pure `lib/`.** No `Date.now()` and no randomness inside `lib/`; time is a parameter (`now: number`, epoch ms).
+- **Warnings** are written by the caller as `console.warn("mat-shell: " + w)`.
+- **Units.** Pixels are logical px; durations are ms; percentages are `0..100` in `lib/` and `0..1` where Quickshell uses `0..1` (`PwNode.audio.volume`); every conversion is named in the contract.
+- **Booleans** are named as states (`shown`, `muted`, `dndEnabled`), never as negatives.
+- **Closed member lists.** A `lib/` module exports exactly the names in its §2 table. A service or `ShellState` declares, at its root, exactly the members in its §3/§4 row; anything else is private and its name starts with `_` (`property var _triggerItems`, `function _parse(text)`), and no other file may read it. `docs/lld/contracts.json` is generated from this file (`python3 scripts/gen-contracts.py`); lint rule G21 and `tests/lib/contracts.test.mjs` enforce it.
+
+---
+
+## 2. Pure Modules (`shell/lib/*.mjs`)
+
+Each module has a test file `tests/lib/<module>.test.mjs` (see the plan for the exact cases). Imports use relative paths (`import { clamp } from "./util.mjs"`).
+
+### 2.1 `util.mjs`
+| Export | Contract |
+|---|---|
+| `clamp(v: number, lo: number, hi: number): number` | `Math.min(hi, Math.max(lo, v))`; `NaN` → `lo` |
+| `deepEqual(a: any, b: any): boolean` | JSON-value equality (objects by keys, arrays by order) |
+| `clone(v: any): any` | `JSON.parse(JSON.stringify(v))` semantics (QML's JS engine has no `structuredClone`) |
+| `pascalCase(s: string): string` | `"controlCenter"` → `"ControlCenter"` |
+
+### 2.2 `generated/widgetOptionsSchema.mjs` and `generated/barPresets.mjs`
+Written by `scripts/gen-shell-data.py` from `design-system/tokens/m3-tokens.json`.
+
+| Module | Export | Contract |
+|---|---|---|
+| `generated/widgetOptionsSchema.mjs` | `WIDGET_OPTIONS: { [type: string]: Field[] }` | `modes.bars.widgetOptions` without `$spec` |
+| | `WIDGET_OPTION_MIGRATIONS` | `modes.bars.widgetOptionMigrations` |
+| `generated/barPresets.mjs` | `BAR_PRESETS: { [name: string]: { label: string, default?: boolean, bars: RawBar[] } }` | `modes.bars.presets` |
+| | `BAR_GUARDRAILS` | `modes.bars.guardrails` |
+| | `WIDGET_TYPES: string[]` | widget types in `02-bar-widgets.md` §1.1 order |
+
+`Field` = `{ key, kind, label, default, help?, choices?: [{value, label, icon?}], min?, max?, step?, unit?, maxLength?, visibleWhen?: {key, equals | notEquals | includes}, orientations?: "both"|"horizontal"|"vertical", group? }` (spec: `02-bar-widgets.md` §1.2).
+
+### 2.3 `widgetCatalog.mjs`
+| Export | Contract |
+|---|---|
+| `CATALOG: CatalogEntry[]` | One entry per `WIDGET_TYPES` item, in `02-bar-widgets.md` §1.1 order: `{ type, label, icon, description, customisable, overflowPriority, security }` |
+| `catalogEntry(type: string): CatalogEntry \| null` | `null` for unknown types |
+| `sourceFile(type: string): string` | `"widgets/" + pascalCase(type) + "Widget.qml"` |
+
+Values (label and description copied from `02-bar-widgets.md` §1.1; `overflowPriority: null` = never hidden):
+
+| type | label | icon | overflowPriority | security |
+|---|---|---|---|---|
+| `launcher` | Launcher | `apps` | null | false |
+| `search` | Search | `search` | 2 | false |
+| `workspaces` | Workspaces | `view_week` | null | false |
+| `submap` | Keybinding mode | `open_with` | null | false |
+| `windowTitle` | Window title | `web_asset` | 1 | false |
+| `media` | Media | `graphic_eq` | 3 | false |
+| `clock` | Clock & calendar | `schedule` | null | false |
+| `controlCenter` | Control center | `toggle_on` | null | false |
+| `notifications` | Notifications | `notifications` | null | false |
+| `tray` | System tray | `more_horiz` | 4 | false |
+| `privacy` | Privacy indicator | `mic` | null | true |
+| `recording` | Recording indicator | `radio_button_checked` | null | true |
+| `telemetry` | System monitor | `memory` | 5 | false |
+| `keyboardLayout` | Keyboard layout | `keyboard` | 4 | false |
+| `power` | Power | `power_settings_new` | null | false |
+| `apps` | Apps (dock / taskbar) | `grid_view` | null | false |
+| `widgetPeek` | Desktop widgets | `widgets` | 3 | false |
+| `settings` | Settings | `settings` | 4 | false |
+| `separator` | Separator | `more_vert` | null | false |
+| `spacer` | Spacer | `space_bar` | null | false |
+
+`customisable` = `type in WIDGET_OPTIONS`.
+
+### 2.4 `widgetOptions.mjs` (spec: `02-bar-widgets.md` §1.2–§1.4; reference implementation: `showcase/index.html` `resolveOptions` / `diffFromDefaults` / `migrateOptions`)
+| Export | Contract |
+|---|---|
+| `hasOptions(type): boolean` | schema exists and is non-empty |
+| `optionsSchema(type): Field[]` | `[]` for unknown types |
+| `fieldApplies(field: Field, orientation: "horizontal"\|"vertical"): boolean` | `!field.orientations \|\| "both" \|\| === orientation` |
+| `resolve(type, options: object\|null, orientation): object` | For each field, in schema order: the stored value if present **and** the field applies, else `default`. `number`: `clamp` to `min..max` (anything but a finite number → default). `choice`: unknown value → default. `toggle`: non-boolean → default. `text` / `format`: non-string → default; longer than `maxLength` → cut to `maxLength`. `multiChoice`: drop unknown values and duplicates, cut to `max`, below `min` → default. `appList`: non-array → default. Unknown keys are **not** in the result. |
+| `diffFromDefaults(type, options): object` | Keeps keys whose value differs from the field default (by `deepEqual`) **and** every unknown key (preserved on save) |
+| `migrate(type, options): { options, warnings }` | `clock`: `format: s` → `{preset: "custom", customFormat: s}`; `showDate: false` (and no `preset`) → `{preset: "time"}`; `showDate: true` → removed. Then `diffFromDefaults`. Other types: `diffFromDefaults` only. |
+| `isFieldVisible(field, resolved: object): boolean` | No `visibleWhen` → true; `equals` → `===`; `notEquals` → `!==`; `includes` → array includes |
+| `toggleListItem(field, list: string[], value): string[] \| null` | Adds at the end or removes; returns `null` when the result would break `min`/`max` |
+| `moveListItem(list, from: int, to: int): string[]` | Out-of-range `to` → unchanged copy |
+| `limitNote(field, list): string` | `multiChoice` only: at `max` → `"Up to <max> items · drag to reorder"`; at `min` → `"At least <min> item"` (+`s` when `min > 1`) + `" · drag to reorder"`; else `"Drag to reorder; order on the bar follows this list"`; other kinds → `""` |
+
+### 2.5 `barConfig.mjs` (spec: `01-bar-system.md` §1.1, §2.1)
+`Bar` = `{ id, name, enabled, screens: "all"|string[], position, mode, thickness, length: "full"|"fit"|int, alignment, marginHorizontal, marginVertical, visibility, reserveSpace, sections: { start: Widget[], center: Widget[], end: Widget[] } }`; `Widget` = `{ type: string, options: object }`.
+
+| Export | Contract |
+|---|---|
+| `BAR_DEFAULTS` | `{ name: "Bar", enabled: true, screens: "all", position: "top", mode: "bar", thickness: 40, length: "full", alignment: "center", marginHorizontal: 8, marginVertical: 8, visibility: "always", reserveSpace: true, sections: {start: [], center: [], end: []} }` |
+| `isVertical(bar): boolean` | position `left`/`right` |
+| `thicknessRange(position): [int, int]` | from `BAR_GUARDRAILS.thicknessPx`: horizontal `[28, 96]`, vertical `[44, 120]` |
+| `edgeGap(bar): int` / `endGap(bar): int` | horizontal bar: `marginVertical` / `marginHorizontal`; vertical bar: the reverse |
+| `normalizeBar(raw, index: int): { bar: Bar, warnings }` | Missing fields → defaults; `id` → `"bar" + (index + 1)`; `name` → `"Bar " + (index + 1)`; legacy `margin` → both margins when unset; invalid enum → default + warning; thickness clamped to `thicknessRange`; margins clamped `0..24`; `length` int clamped `10..100`, other strings → `"full"`; section entries that are strings become `{type, options: {}}`; unknown widget types are kept with a warning; each widget's options pass through `migrate`. A non-object `raw` is treated as `{}` with a warning; a present value of the wrong type (`enabled: "yes"`, `screens: 3`, a section that is not an array) → default + warning; unknown bar keys and section names are dropped with a warning; section entries without a string `type` are dropped with a warning. Missing values never warn |
+| `defaultConfig(): Config` | fresh object (§3.1) with bars from the preset marked `default: true` and `keybinds: {}` (an empty map means "use `keybinds.defaultBinds()`") |
+| `normalizeConfig(raw: any): { config: Config, warnings }` | Non-object or array → `defaultConfig()` + a warning; missing top-level keys → defaults; unknown top-level keys preserved; `bars` missing → default preset; `schemaVersion` set to `1`. `bars` present but not an array → default preset + warning. A section whose default is an object (`appearance`, `notifications`, …) but whose value is not → default + warning; missing keys inside such a section → their defaults (values inside sections are not type-checked here; the service that reads them does) |
+| `presetBars(name): Bar[]` | normalized copy of a preset; unknown name → `[]` |
+| `barAppliesToScreen(bar, screenName: string): boolean` | `screens === "all"` or list includes the name |
+| `placementProblems(bars, screenName, screen: {width, height}): string[]` | `"Only 2 bars fit on the <edge> edge"` when more than `maxBarsPerEdge` enabled bars on that screen share an edge; `"Bars may reserve at most 25% of the screen <height\|width>"` when reserved extents on one axis exceed `maxReservedSharePerAxis` |
+| `firstRunPinned(groups: string[][], exists: (id) => boolean): string[]` | the first existing desktop ID of each group, in group order |
+| `FIRST_RUN_PIN_GROUPS` | `[["firefox.desktop", "org.mozilla.firefox.desktop", "chromium.desktop"], ["org.gnome.Nautilus.desktop", "thunar.desktop", "org.kde.dolphin.desktop"], ["org.wezfurlong.wezterm.desktop", "kitty.desktop", "foot.desktop", "Alacritty.desktop"]]` |
+
+### 2.6 `barGeometry.mjs` (spec: `01-bar-system.md` §2–§7, `foundations/05` §3)
+`Ctx` = `{ desktopMode: "tiling"|"floating", revealed: boolean, windowsOverlap: boolean, barFocusActive: boolean, settingsPreview: boolean }`.
+
+| Export | Contract |
+|---|---|
+| `effectiveVisibility(bar, desktopMode): "always"\|"autohide"\|"dodge"` | `auto` → `dodge` in tiling, `always` in floating |
+| `isShown(bar, ctx: Ctx): boolean` | `always` → true; `revealed \|\| barFocusActive \|\| settingsPreview` → true; `autohide` → false; `dodge` → `!windowsOverlap` |
+| `extent(bar): int` | `thickness + edgeGap(bar)` |
+| `exclusiveZone(bar, shown, desktopMode): int` | `reserveSpace && shown && effectiveVisibility !== "autohide" ? extent : 0` |
+| `stackOffsets(bars: Bar[], shownIds: string[]): {[id]: int}` | per edge, in config order: offset = sum of `extent` of earlier **shown** bars on that edge |
+| `insets(bars, shownIds): {top, right, bottom, left}` | per edge: max(`offset + extent`) over shown bars; 0 when none |
+| `maxInsets(bars): {top, right, bottom, left}` | `insets` with every enabled bar shown |
+| `lengthPx(bar, avail: int, implicit: int): int` | `full` → `avail − 2·endGap`; `fit` → `min(implicit, avail − 2·endGap)`; percent `p` → `min(round(avail·p/100), avail − 2·endGap)` |
+| `alignOffset(bar, avail, size): int` | `full` → `endGap`; else `start` → `endGap`, `center` → `round((avail − size)/2)`, `end` → `avail − size − endGap` |
+| `regions(bars, shownIds, screen: {width, height}, lengths: {[id]: int}): Rect[8]` | Slot `edgeIndex·2 + stackIndex` (edges `top, right, bottom, left`); rect from the screen edge to the bar's inner edge, along `lengthPx` at `alignOffset`; unused slots `{x:0, y:0, width:0, height:0}` |
+
+### 2.7 `overflow.mjs` (spec: `02-bar-widgets.md` §2.1; resolves C10)
+| Export | Contract |
+|---|---|
+| `planOverflow(items: [{id, priority: int\|null, widths: int[]}], available: int, gap: int): {steps: {[id]: int}, hidden: string[]}` | Start every item at step 0 (`widths[0]`). While `Σ width + gap·(v−1) > available` (`v` = items whose current width is > 0): advance by one step the item with the **highest** `priority` number that has a next step (ties: the later item); `priority: null` never advances. Stop when it fits or nothing can advance. `hidden` = ids whose current width is `0` (listed in the overflow chevron). |
+
+### 2.8 `shellReducer.mjs` (spec: `interactions/01` §2–§3, `interactions/02` §2–§3)
+`S` = `{ activePopover: string, activeModal: string, launcherMode: string, sessionLocked: boolean, barFocusActive: boolean }`.
+
+| Export | Contract |
+|---|---|
+| `POPOVERS`, `MODALS`, `LAUNCHER_MODES` | the lane value lists of `01-architecture.md` §5.1 (without `""`) |
+| `INITIAL: S` | `{ activePopover: "", activeModal: "", launcherMode: "apps", sessionLocked: false, barFocusActive: false }` |
+| `securityModalActive(s): boolean` | `activeModal === "polkit"` |
+| `togglePopover(s, name, closesSame: boolean): S` | unchanged if locked, security-active, or unknown name; else `activeModal: ""`, `barFocusActive: false`, and `activePopover` = `""` when `name === activePopover && closesSame`, else `name`. The caller passes `closesSame = trigger === null \|\| trigger === popoverTrigger`. |
+| `closePopover(s): S` | `activePopover: ""` |
+| `toggleModal(s, name): S` | unchanged if locked, unknown name, or security-active; else `activePopover: ""`, `barFocusActive: false`, `activeModal` = `""` if already `name`, else `name`. `"polkit"` is never toggled: use `openModal` / `closeModal(s, true)` |
+| `openModal(s, name): S` | unchanged if locked or unknown; while polkit is active only `"polkit"` passes; `"polkit"` preempts any modal; sets `activeModal: name`, clears `activePopover` and `barFocusActive` |
+| `closeModal(s, byPolkit?: boolean = false): S` | while polkit is active only `byPolkit === true` closes it; otherwise `activeModal: ""` |
+| `openLauncherMode(s, mode): S` | invalid mode → `"apps"`; then `openModal(s, "launcher")` with `launcherMode` set |
+| `lock(s): S` | `activePopover: ""`, `activeModal: ""`, `barFocusActive: false`, `sessionLocked: true` (the caller cancels polkit first) |
+| `unlock(s): S` | `sessionLocked: false` |
+| `openSettings(s): { state: S, emit: boolean }` | `emit: false` and unchanged when locked or security-active; else popover, modal, bar focus cleared and `emit: true` |
+| `focusBar(s): S` | unchanged when locked or security-active; else popover and modal cleared, `barFocusActive: true` |
+| `escape(s, inlineDepth: int): { state: S, consumed: "inline"\|"polkit"\|"surface"\|"none" }` | `inlineDepth > 0` → `"inline"` (caller collapses its sub-state); polkit active → `"polkit"` (caller runs `PolkitService.cancel()`); popover, modal, or bar focus open → all cleared, `"surface"`; else `"none"` |
+
+### 2.9 `popoverPlacement.mjs` (spec: `primitives/04` §1)
+| Export | Contract |
+|---|---|
+| `placePopover({ edge, origin: Rect, card: {width, height}, screen: {width, height}, insets, gap }): { x, y, originX, originY }` | Screen-local coordinates. `top`: `y = insets.top + gap`, `x` = origin centre − `width/2`, clamped to `[insets.left + gap, screen.width − insets.right − gap − width]`. `bottom`: `y = screen.height − insets.bottom − gap − height`, same `x`. `left`: `x = insets.left + gap`, `y` = origin centre − `height/2`, clamped vertically the same way. `right`: mirror of left. `none`: top-end corner `x = screen.width − insets.right − gap − width`, `y = insets.top + gap`. `originX/originY` = the origin centre projected onto the card edge that faces the bar, clamped to the card (the `Scale` transform origin). `none` has no bar: `originX = width`, `originY = 0` (the card grows from its top-end corner). |
+
+### 2.10 `wheel.mjs` (spec: `foundations/04` §3)
+| Export | Contract |
+|---|---|
+| `wheelStep(acc: number, ev: {angleDeltaY, pixelDeltaY, inverted}, opts: {stepAngle, stepPixels, physical}): {acc, steps}` | Use `pixelDeltaY` with `stepPixels` when it is non-zero, else `angleDeltaY` with `stepAngle`. Negate the delta when `opts.physical && ev.inverted`. `acc += delta`; `steps = Math.trunc(acc / step)`; `acc -= steps · step`. Positive steps = wheel up = increase. Callers pass `Tokens.metrics.wheelStepAngle` (120) and `touchpadStepPixels` (40) and reset `acc` to 0 on hover exit. |
+
+### 2.11 `keybinds.mjs` (spec: `interactions/02` §1; `01-architecture.md` §7)
+| Export | Contract |
+|---|---|
+| `ACTIONS: Action[]` | `{ id, label, group, ipc: {target, fn, args: string[]}, defaultChords: string[], core: boolean, repeat: boolean }`, one per action id in `01-architecture.md` §7 (20 actions), in that order; `core: true` for `toggleLauncher`, `openSettings`, `togglePower`; `repeat: true` for `volumeUp`, `volumeDown`, `brightnessUp`, `brightnessDown` |
+| `normalizeChord(chord: string): string` | Modifiers first in the order `Ctrl, Alt, Shift, Super`; aliases `Control→Ctrl`, `Mod4/Win/Meta/Logo→Super`, `Esc→Escape`, `","→Comma`, `"."→Period`; single letters uppercase; other key names keep their case; parts joined with `+`; empty → `""` |
+| `defaultBinds(): {[id]: string[]}` | normalized `defaultChords` per action |
+| `findConflict(binds, chord, exceptId): string \| null` | id of another action that has the same normalized chord |
+| `canUnbind(id): boolean` | `!core` |
+| `hyprBindLines(id, chord): string[]` | empty chord, or a chord with no key other than lone `Super` → `[]`; `"Super+Shift+S"` → `["bind = SUPER SHIFT, S, global, mat-shell:toggleCapture"]`; no modifiers (`"Print"`) → `["bind = , Print, global, mat-shell:<id>"]`; lone `"Super"` → `["bindr = SUPER, Super_L, global, mat-shell:<id>"]`; `repeat` actions use `binde`; key names map `Comma→comma`, `Period→period`, `Space→space`, everything else unchanged; modifiers map `Ctrl→CTRL`, `Alt→ALT`, `Shift→SHIFT`, `Super→SUPER` |
+| `bindsConf(binds): string` | header `# Generated by mat-shell KeybindService — edits are overwritten` + lines in `ACTIONS` order + trailing newline |
+| `niriSnippet(binds): string` / `swaySnippet(binds): string` | One line per chord, running `IPC_PREFIX` (`"qs -c mat-shell ipc call"`) + `ipc.target ipc.fn ipc.args…`. Niri: `Mod+A { spawn "qs" "-c" "mat-shell" "ipc" "call" "shell" "toggleControlCenter"; }` (modifiers `Super→Mod`, `Ctrl→Ctrl`, `Alt→Alt`, `Shift→Shift`). Sway: `bindsym Mod4+a exec qs -c mat-shell ipc call shell toggleControlCenter` (modifiers `Super→Mod4`, `Ctrl→Control`, `Alt→Mod1`; letters lowercase; `Comma→comma`, `Period→period`, `Space→space`). Both skip chords without a key (lone `Super`), write an empty argument as `""`, and end with `\n` |
+
+`ACTIONS` data (labels and groups from `16-settings.md` §3.3; chords from `01-architecture.md` §7.1–§7.2):
+
+| id | label | group | ipc (`target fn args`) |
+|---|---|---|---|
+| `toggleLauncher` | Open launcher | Launcher & Overview | `shell toggleLauncher` |
+| `launcherClipboard` | Clipboard history | Launcher & Overview | `shell openLauncherMode clip` |
+| `launcherEmoji` | Emoji picker | Launcher & Overview | `shell openLauncherMode emoji` |
+| `toggleOverview` | Workspace overview | Launcher & Overview | `shell toggleOverview` |
+| `toggleControlCenter` | Control center | Shell | `shell toggleControlCenter` |
+| `toggleNotifications` | Notification center | Shell | `shell toggleNotifications` |
+| `toggleCalendar` | Calendar & weather | Shell | `shell toggleCalendar` |
+| `toggleMedia` | Media player | Media & Volume | `shell toggleMedia` |
+| `togglePower` | Power menu | Session | `shell togglePower` |
+| `toggleCapture` | Screenshot & recording | Capture | `shell toggleCapture` |
+| `toggleThemeStudio` | Wallpaper & theme | Shell | `shell toggleThemeStudio` |
+| `toggleWidgetPeek` | Desktop widgets | Shell | `shell toggleWidgetPeek` |
+| `openSettings` | Settings | Shell | `shell openSettings ""` |
+| `focusBar` | Focus the bar | Shell | `shell focusBar` |
+| `lock` | Lock screen | Session | `shell lock` |
+| `volumeUp` | Volume up | Media & Volume | `osd changeVolume 5` |
+| `volumeDown` | Volume down | Media & Volume | `osd changeVolume -5` |
+| `toggleMute` | Mute | Media & Volume | `osd toggleMute` |
+| `brightnessUp` | Brightness up | Media & Volume | `osd changeBrightness 5` |
+| `brightnessDown` | Brightness down | Media & Volume | `osd changeBrightness -5` |
+
+### 2.12 Domain helpers
+| Module | Export | Contract |
+|---|---|---|
+| `clockFormat.mjs` | `clockPattern(opt, systemTwelveHour: boolean): {pattern, timePattern, twelveHour, needsSeconds}` | Same rules as `02-bar-widgets.md` §8 `ClockWidget.qml`: `time` = `(12h ? "h:mm" : "HH:mm") + (showSeconds ? ":ss" : "") + (12h ? " AP" : "")`; presets `time`, `weekdayTime` = `"ddd  " + time`, `dateTime` = `"ddd d MMM  " + time`, `fullDate` = `"dddd d MMMM  " + time`, `custom` = `customFormat`. `timePattern` = `time` (also under `custom`). `needsSeconds` = the final `pattern` has an unquoted `s`, so a hidden `showSeconds` under `custom` has no effect |
+| | `verticalPatterns(opt, twelveHour): string[]` | `[12h ? "h" : "HH", "mm"]` + `["ss"]` when `showSeconds` |
+| | `qtPatternError(pattern): string` | `""` when valid; else `"Enter a pattern"`, `"Close the quoted text with '"`, or `"Add at least one date or time code, e.g. HH:mm"` (same order and rules as the showcase: an odd number of `'` is unclosed; codes, outside quotes, are `d dd ddd dddd M MM MMM MMMM yy yyyy h hh H HH m mm s ss AP ap`) |
+| `notifications.mjs` | `shouldToast(urgency: "low"\|"normal"\|"critical", dnd): boolean` | `!dnd \|\| urgency === "critical"` |
+| | `toastTimeoutMs(urgency, expireTimeoutMs: int): int` | critical → `0`; `expireTimeoutMs > 0` → it; low → `4000`; normal → `6000` |
+| | `sanitizeBody(markup: string): string` | keeps `<b> <i> <u> <br>` and `<a href="http(s)://…">`, drops every other tag and attribute, escapes `& < >` in text |
+| | `groupHistory(items: [{id, appName, time}]): [{appName, items}]` | groups by `appName`; items newest first; groups ordered by their newest item |
+| `launcherQuery.mjs` | `parseQuery(text: string): {mode, term}` | `"win "` → `win`; `"clip "` → `clip` (also exactly `"win"`/`"clip"`); leading `=` → `calc`; `>` → `cmd`; `:` → `emoji`; else `apps`; `term` trimmed |
+| | `fuzzyScore(term, text): number` | `0` no match; prefix match `300 − len`; word-start match `200 − len`; in-order subsequence `100 − gaps`; case-insensitive. `len` = text length; a word starts after a space, `-`, `_` or `.`; `gaps` = characters skipped between the first and last matched character; a subsequence scores at least `1`; an empty term scores `0` |
+| | `rankApps(term, apps: [{id, name, genericName, keywords: string[]}], usage: {[id]: int}, limit = 8): app[]` | best of `fuzzyScore` over `name`, `genericName` and each keyword; apps scoring `0` are dropped; ties by usage (higher first) then name (A–Z); empty term → every app by usage then name; at most `limit` |
+| `telemetry.mjs` | `parseProcStat(text): {idle, total}` | from the first `cpu ` line: `idle = idle + iowait`, `total` = sum of fields |
+| | `cpuPercent(prev, cur): number` | `100 · (1 − Δidle/Δtotal)`, `0` when `Δtotal ≤ 0`, rounded to an int |
+| | `parseMeminfo(text): {totalKb, availableKb, usedPercent}` | `MemTotal`, `MemAvailable`; `usedPercent` rounded |
+| `session.mjs` | `ACTION_COMMANDS` | `suspend: ["systemctl", "suspend"]`, `hibernate: ["systemctl", "hibernate"]`, `reboot: ["systemctl", "reboot"]`, `shutdown: ["systemctl", "poweroff"]` |
+| | `logoutCommand(compositor: "hyprland"\|"niri"\|"other", user: string): string[]` | `["hyprctl", "dispatch", "exit"]`, `["niri", "msg", "action", "quit"]`, `["loginctl", "terminate-user", user]` |
+| | `parseInhibitorsJson(json: object): [{what, who, why, mode, uid, pid}]` | from `busctl --json=short call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager ListInhibitors` (`data[0]` is the list of `(what, who, why, mode, uid, pid)` tuples); malformed → `[]` |
+| | `blockingInhibitors(list): list` | `mode === "block"` and `what` contains `shutdown` or `sleep` |
+| `weather.mjs` | `parseWttr(json: object, fetchedAt: int): Weather \| null` | from wttr `j1`: `current_condition[0]` → `{tempC, feelsLikeC, code, description, humidity, windKph}` + `hourly` + `fetchedAt`. `hourly`: the slots of `weather[0].hourly` then `weather[1].hourly` as `{day: 0\|1, hour: int(time) / 100, tempC, code}`, starting at the first day-0 slot whose hour ≥ `new Date(fetchedAt).getHours()`, at most 6. Numbers are parsed from wttr's strings. `current_condition[0]` missing or `temp_C` not numeric → `null` |
+| | `isStale(fetchedAt, now, maxAgeMs = 1800000): boolean` | `now − fetchedAt > maxAgeMs` |
+| | `weatherIcon(code: int, night: boolean): string` | `113` → `sunny`/`clear_night`; `116` → `partly_cloudy_day`/`partly_cloudy_night`; `119, 122` → `cloud`; `143, 248, 260` → `foggy`; `200, 386, 389, 392, 395` → `thunderstorm`; snow codes `179, 227, 230, 323–338, 368, 371` → `weather_snowy`; every other code → `rainy` |
+| `hyprParse.mjs` | `parseClients(json: array): Client[]` | `{ address, title, appId (class), workspaceId, monitor, floating, fullscreen, x, y, width, height }` from `hyprctl clients -j`; `fullscreen` is a boolean (`!== 0`); `x, y` from `at`, `width, height` from `size`; non-object entries are skipped; non-array → `[]` |
+| | `windowsOverlap(clients, rect, workspaceId): boolean` | any non-floating client on the workspace intersects `rect` (shared edges do not count) |
+
+---
+
+## 3. Services (`shell/MatShell/Services/*.qml`)
+
+Every service is `pragma Singleton` + `Singleton { id: root }`, registered in `qmldir`. Properties marked **ro** are `readonly property`. A service starts no poller until a consumer calls its `sample()`/`refresh()` or binds a `*Active` flag (R07).
+
+### 3.1 `ConfigService`
+Owns `~/.config/mat-shell/config.json` through `FileView { watchChanges: true; atomicWrites: true }`. Parses with `JSON.parse` and `barConfig.normalizeConfig`. It does not use `JsonAdapter`, because the bar tree is dynamic.
+
+`Config` (schema, `schemaVersion: 1`):
+
+```json
+{
+  "schemaVersion": 1,
+  "appearance": { "darkMode": true, "surfaceMode": "frosted_tonal_glass", "desktopMode": "tiling", "densityMode": "comfortable",
+                  "schemeVariant": "scheme-tonal-spot", "themedIcons": true, "widgetScale": 1.0 },
+  "theme": { "wallpaper": "" },
+  "bars": [ "Bar objects (§2.5)" ],
+  "widgets": { "enabled": true },
+  "notifications": { "dnd": false, "toastCorner": "top-right" },
+  "keybinds": { "<actionId>": ["<chord>"] },
+  "animations": { "expressiveSprings": true },
+  "accessibility": { "reducedMotion": false, "reducedTransparency": false, "highContrast": false, "textScale": 1.0, "confirmByHold": true },
+  "ui": { "lastSettingsPage": "appearance" }
+}
+```
+
+| Member | Contract |
+|---|---|
+| ro `config: var` | the current normalized `Config` (replaced as a whole on every change, so bindings update) |
+| ro `error: string` | `""`, or `"config.json has an error on line N"` after an invalid external edit (the last good config stays active) |
+| ro `loaded: bool` | true after the first successful read or first-run write |
+| `get(path: string): var` | dotted path read (`"notifications.dnd"`) |
+| `set(path: string, value: var): void` | dotted path write → new `config` → debounced write (300ms) |
+| `transaction(label: string, fn: function): void` | runs `fn` with `set` calls batched into one undo entry and one write |
+| `undo(): bool` | restores the previous entry (max 50 entries) |
+| ro `undoLabel: string` | label of the entry `undo()` would restore |
+| `addBar(): string` | first edge with capacity (rule order `top, bottom, left, right`), widgets `launcher, workspaces / clock / controlCenter`; returns the id |
+| `updateBar(id: string, patch: object): void` | shallow-merge, then `normalizeBar` |
+| `removeBar(id: string): void` | one undo entry |
+| `applyPreset(name: string): void` | replaces `bars` (one undo entry) |
+| `removeWidget(barId, section, index): void` | one undo entry |
+| `setWidgetOptions(barId, section, index, options: object): void` | stores `diffFromDefaults(type, options)`; an empty result removes the `options` key |
+| `restoreLastGood(): void` | rewrites the file from the last good config |
+
+First run (file missing): write `defaultConfig()` with the dock's `apps.options.pinned` = `firstRunPinned(FIRST_RUN_PIN_GROUPS, id => DesktopEntries.byId(id) !== null)`.
+
+### 3.2 Other services (summary contracts)
+
+| Service | Properties (ro unless noted) | Functions / signals | Notes |
+|---|---|---|---|
+| `BarWidgetRegistry` | `catalog: var` (`CATALOG`) | `has(type)`, `source(type)`, `label(type)`, `icon(type)`, `description(type)`, `hasOptions(type)`, `optionsSchema(type)`, `resolve(type, options, orientation)`, `diffFromDefaults(type, options)`, `migrate(type, options)`, `sectionLabel(section, orientation)` → `Start/Center/End` or `Top/Middle/Bottom` | Thin pass-through to `widgetCatalog.mjs` + `widgetOptions.mjs` |
+| `CompositorService` | `kind: string` (`"hyprland"\|"niri"\|"other"`), `workspaces: var` (`[{id, name, focused, occupied, urgent, monitor}]`), `focusedWorkspaceId: int`, `focusedScreen: var` (ShellScreen), `activeWindowTitle: string`, `activeWindowAppId: string`, `activeSubmap: string`, `clients: var` (`Client[]`) | `switchToWorkspace(id: int)`, `moveFocusedWindowToWorkspace(id: int)`, `toggleFloating()`, `focusWindow(address: string)`, `moveWindowToWorkspace(address, id)`, `windowsOverlap(rect, screen): bool`, `refreshClients()`, `exit()` | Detects kind via `HYPRLAND_INSTANCE_SIGNATURE` / `NIRI_SOCKET`; `clients` refreshes on Hyprland window events, not by polling |
+| `BarService` | `instances: var` (`[{bar, screen}]`, config order, honours `screens`), `bars: var` | `isShown(barId, screen): bool`, `insets(screen)`, `maxInsets(screen)`, `edgeGap(bar)`, `endGap(bar)`, `innerEdge(barId, screen)`, `regions(screen)`, `hostsWidget(screen, type, visibleOnly: bool)`, `effectiveThickness(bar)`, `lengthPx(bar, avail, implicit)`, `alignOffset(bar, avail, size)`, `canPlace(screen, edge): bool`, `thicknessRange(position)`, `placementProblems(screen)`, `setEdgeHover(barId, screen, hovered: bool)`, `reportLength(barId, screen, px)` | Wraps `barGeometry.mjs`; tracks reveal state with dwell `barRevealDwellMs` (120) and hide delay 600ms; `windowsOverlap` from `CompositorService` |
+| `AudioService` | `sink`, `source` (PwNode), `volume: real` (0..1.5), `muted: bool`, `micMuted: bool`, `sinks: var`, `appStreams: var`, `activeCaptureStreams: var` (`[{appName, kind: "mic"\|"camera"\|"screen"}]`) | `setVolume(v: real)`, `toggleMute()`, `toggleMicMute()`, `setDefaultSink(node)` | `PwObjectTracker { objects: [sink, source] }` is mandatory (`interactions/03` §2.1) |
+| `BatteryService` | `present: bool`, `percentage: real` (0..1, as `UPower.displayDevice.percentage`), `isCharging: bool`, `timeToEmptySec: int`, `timeToFullSec: int`, `powerProfile: string` (`"performance"\|"balanced"\|"power-saver"`) | `setPowerProfile(p: string)` | `UPower.displayDevice`; profiles via the `PowerProfiles` singleton (`PowerProfile.PowerSaver/Balanced/Performance`) in `Quickshell.Services.UPower` |
+| `MediaService` | `players: var`, `activePlayer: var`, `trackTitle`, `trackArtist`, `trackAlbum`, `trackArtUrl: string`, `isPlaying: bool`, `position: real`, `length: real`, `artPalette: var` (`{primary, onPrimary, container}` or null), `positionActive: bool` (rw, consumers set while visible) | `togglePlaying()`, `next()`, `previous()`, `seek(offsetSec: real)`, `selectPlayer(index: int)` | Position `Timer` runs only while `positionActive && isPlaying`; palette via `matugen image <art> --dry-run --json hex -t scheme-content --source-color-index 0` |
+| `NetworkService` | `wifiEnabled: bool`, `connected: bool`, `ssid: string`, `signal: int` (0..100), `networks: var` (`[{ssid, signal, secure, active}]`), `vpnActive: bool`, `scanning: bool` | `setWifiEnabled(on)`, `scan()`, `connect(ssid, password: string)`, `disconnect()` | `nmcli -t -f SSID,SIGNAL,SECURITY,ACTIVE dev wifi`; `scan()` only while the Wi-Fi sheet is open |
+| `BluetoothService` | `available: bool`, `powered: bool`, `devices: var` (`[{address, name, connected, battery}]`) | `setPowered(on)`, `connect(address)`, `disconnect(address)` | `Quickshell.Bluetooth` (Quickshell ≥ 0.2); no `bluetoothctl` |
+| `NotificationService` | `toasts: var`, `history: var` (grouped), `unreadCount: int`, `dndEnabled: bool` | `setDnd(on)`, `dismiss(id)`, `invokeAction(id, actionId)`, `reply(id, text)`, `clearAll()`, `markAllRead()` | Hosts `NotificationServer` with all five `*Supported` flags `true` (C05); `dndEnabled` mirrors `ConfigService` `notifications.dnd` |
+| `BrightnessService` | `available: bool`, `brightness: real` (0..1) | `adjust(deltaPercent: int)`, `set(value: real)` | `brightnessctl`; `FileView` on `/sys/class/backlight/*/brightness` |
+| `TelemetryService` | `cpuPercent: int`, `ramPercent: int`, `gpuPercent: int`, `temperatureC: int`, `diskPercent: var` (`{[mount]: int}`), `netDownBps: int`, `netUpBps: int`, `swapPercent: int` | `sample(metrics: var, diskMount: string)` | No internal timer: each visible consumer owns a `Timer` and calls `sample` (`interactions/03` §2.3) |
+| `KeyboardService` | `capsLock: bool`, `numLock: bool`, `layoutCode: string`, `layouts: var` (`[{code, name}]`), `layoutIndex: int` | `setLayout(index: int)`, `nextLayout()` | Hyprland `activelayout` events; caps lock from `/sys/class/leds/*::capslock/brightness` |
+| `AccessibilityService` | — | `setSwitch(name: string, value: string)`: `reducedMotion`, `reducedTransparency`, `highContrast`, `expressiveSprings`, `confirmByHold` (`"true"/"false"`), `textScale` (`"1"`, `"1.15"`, `"1.3"`) | Persists via `ConfigService`; `Tokens` switches bind to `ConfigService.config.accessibility.*` in `shell.qml` |
+| `ThemeService` | `currentWallpaper: string`, `wallpapers: var`, `busy: bool`, `lastError: string`, `canUndo: bool` | `applyWallpaper(path)`, `applyScheme(variant)`, `regenerate()`, `previewPalette(path, callback)`, `undoLastTheme()`, `regionLuma(rect): real`; signal `themeFailed(string stderr)` | The matugen command from `interactions/03` §2.4; backs up to `~/.cache/mat-shell/theme.prev.json` before applying |
+| `KeybindService` | `binds: var` (`{[id]: chords}`), `compositor: string` | `setChord(id, chord): string` (`""` on success, else the conflicting action id), `reset(id)`, `resetAll()`, `snippet(): string` | Writes `binds.conf` with `keybinds.bindsConf`, then `hyprctl reload`; on Niri/Sway only produces `snippet()` |
+| `SessionService` | `inhibitors: var` (`blockingInhibitors(parseInhibitorsJson(…))`) | `run(actionId: "suspend"\|"hibernate"\|"logout"\|"reboot"\|"shutdown")`, `refreshInhibitors()` | Lock is not a session command: the power menu calls `ShellState.lockSession()` (services must not depend on State); `run("lock")` warns and does nothing |
+| `CaptureService` | `recording: bool`, `recordingSinceMs: int`, `lastFile: string` | `screenshot(rect)`, `screenshotScreen(screen)`, `startRecording(rect, withAudio: bool)`, `stopRecording()` | `grim`/`slurp`/`wf-recorder` command lines from `13-screen-capture-and-recording.md` §7; stop = `SIGINT` |
+| `PolkitService` | `pending: bool`, `actionId`, `message`, `iconName`, `details: var`, `identities: var`, `attemptsLeft: int` (3), `verifying: bool`, `error: string` | `authenticate(password: string)`, `cancel()`; signal `requested()`, `finished(bool success)` | Wraps `PolkitAgent` from `Quickshell.Services.Polkit` (Quickshell ≥ 0.3.0); passwords go only to the agent's response call, never to a command line or log |
+| `WeatherService` | `weather: var` (`Weather` or null), `stale: bool`, `loading: bool`, `error: string` | `refresh()` | `curl -s "wttr.in/?format=j1"`, cache in `~/.cache/mat-shell/weather.json`, refresh at most every 30 min while a consumer is visible |
+| `LauncherService` | `apps: var` (from `DesktopEntries`), `usage: var` | `query(text: string): var` (`{mode, rows}`), `activate(row)`, `calc(expr, callback)` (`qalc -t`), `clipboard(callback)` (`cliphist list`), `pasteClip(id)`, `pin(appId)` | Rows are ranked with `launcherQuery.rankApps`; `pin` writes the first `apps` widget's `pinned` through `ConfigService` |
+| `SettingsIndex` | `categories: var` (`[{key, label, icon}]`, the nine page keys in `16-settings.md` order) | `indexOf(key)`, `pageFile(key)` → `<Pascal>Page.qml`, `search(text)` → `[{label, page, anchorId}]` | Static data; also feeds the launcher's `settings` rows |
+
+---
+
+## 4. `ShellState` (`MatShell/State/ShellState.qml`)
+
+Properties, functions, and IPC exactly as `interactions/01` §3 (names copied in `01-architecture.md` §5.1 and §7). Additions and constraints:
+
+| Member | Contract |
+|---|---|
+| `activePopover`, `activeModal`, `launcherMode`, `sessionLocked`, `barFocusActive` | **ro** from the outside; changed only through the functions, which call `shellReducer.mjs` and assign all five from the returned state |
+| ro `widgetPeekActive`, ro `securityModalActive` | derived |
+| ro `dndEnabled` | `NotificationService.dndEnabled` (C06); write with `NotificationService.setDnd()` |
+| `popoverOriginRect: rect`, `popoverOriginEdge: string`, `popoverTrigger: Item` | set by `togglePopover` from the trigger item (`barEdge`, `mapToGlobal`) |
+| `registerTrigger(name, item)`, `unregisterTrigger(name, item)`, `resolveTrigger(name)` | as spec; `resolveTrigger` prefers the first item on `CompositorService.focusedScreen`. The spec's `triggerItems` map is private: name it `_triggerItems` |
+| `togglePopover(name, triggerItem)`, `closeActivePopover()`, `toggleModal(name)`, `openModal(name)`, `closeActiveModal()`, `openLauncherMode(mode)`, `lockSession()`, `unlockSession()`, `openSettings(page)`, `focusBar()`, `handleEscape(inlineDepth: int): string` | each calls the reducer; `handleEscape` returns the reducer's `consumed` value; `lockSession` calls `PolkitService.cancel()` first when polkit is pending |
+| signal `settingsRequested(string page)` | emitted by `openSettings` when the reducer says `emit` |
+| `IpcHandler { target: "shell" }`, `IpcHandler { target: "mode" }` | functions in `01-architecture.md` §7 |
+| `GlobalShortcut { appid: "mat-shell"; name: <actionId> }` | one per action in `keybinds.ACTIONS` whose `ipc.target` is `"shell"`, only when `CompositorService.kind === "hyprland"` (C09); `onPressed` (and `onReleased` for the lone-`Super` launcher bind) calls the same function as the IPC entry |
+
+---
+
+## 5. Primitives (`MatShell/Primitives/*.qml`)
+
+Specs: `primitives/01..04`. The table gives the public API. Members marked † are **defined by this LLD** because the spec leaves them unspecified. Every interactive primitive inherits the keyboard and Accessible contract of `M3Surface` (`foundations/04`): `activeFocusOnTab`, Return/Enter/Space → `clicked()`, Menu/Shift+F10 → `rightClicked()`, focus ring only when `activeFocus && Tokens.keyboardModality`, Tab/arrows set `keyboardModality = true`, a pointer press sets it false.
+
+| Primitive | Root | Public API |
+|---|---|---|
+| `M3Surface` | `Rectangle` | `tier: int = 1`, `customColor: color = "transparent"`, `contentColor: color` (`onPrimary` at tier 4 else `onSurface`), `cornerRadius: real = Tokens.shape.lg`, `interactive: bool = false`, `active: bool = false`, `accessibleName`, `accessibleDescription`, `tooltipText: string = ""`, `hitTopExtension`, `hitBottomExtension`, `hitSideExtension: real = 0`, `keyPressed: bool`; ro `hovered`, `pressed`, `focusVisible`; signals `clicked()`, `rightClicked()`, `middleClicked()` |
+| `M3StateLayer` † | `Rectangle` | `contentColor: color`, `hovered`, `pressed`, `focused`, `dragged: bool`; `color: Tokens.color.stateLayer(contentColor, hovered, pressed, focused, dragged)`; `radius` follows `parent.radius`; `Accessible.ignored: true` |
+| `M3GlassPanel` † | `M3Surface` | `M3Surface` with `tier: 0`; it only enables compositor blur through the namespace rule (`foundations/01`); no new properties |
+| `M3Card` † | `M3Surface` | `variant: string = "elevated"` (`"elevated"`: tier 1, `shape.xl`, 1px border; `"filled"`: tier 2, `shape.lg`, no border; `"outlined"`: tier 0, `shape.lg`, `outlineVariant` @40%); `default property alias content` |
+| `M3Divider` † | `Rectangle` | `vertical: bool = false`, `inset: bool = false` (`spaceLg` start inset); 1px; colour `withAlpha(outlineVariant, 0.24)` |
+| `M3Scrim` † | `Rectangle` | `shown: bool`; colour `withAlpha(scrim, Tokens.metrics.scrimAlpha)`; opacity fade `springDefaultEffects.durationMs`; signal `dismissed()` on press |
+| `M3ScreenCorners` † | `PanelWindow` | `required property var modelData` (screen); namespace `"mat-corners"`, `Overlay`, `mask: Region {}`; four concave corners of `Tokens.shape.xl` in `surfaceTier(0)` |
+| `M3PolygonSurface` | `Item` | per spec §5.1 (`polygonKind`, `fillColor`, `contentColor`, `interactive`, `slowRotate`, `accessibleName`, `content`, `morphProgress`; ro `hovered`, `pressed`, `focusVisible`, `safeContentSize`; `clicked()`); also sets `Tokens.keyboardModality = true` on Tab (C14) |
+| `M3Button` † | `M3Surface` | `text: string`, `leadingIcon: string = ""`, `variant: string = "filled"` (`filled`, `tonal`, `outlined`, `text`, `destructive`), `enabled`; height per density (`40/36/44`); `Accessible.name: text` |
+| `M3IconButton` † | `M3Surface` | `icon: string`, `variant: string = "standard"` (`standard`, `tonal`, `filled`), `toggled: bool = false`, `accessibleName` (**required**); size `Tokens.metrics.minIconButtonTarget`; `tooltipText` defaults to `accessibleName` |
+| `M3SegmentedButton` † | `Item` | `model: var` (`[{value, label, icon?}]`), `value: var`, `disabledReason: var` (`function(value) → string`, optional); signal `selected(var value)`; arrow keys move, Space/Enter selects; `Accessible.role: Accessible.RadioButton` per segment |
+| `M3FilterChip` † | `M3Surface` | `text`, `icon: string = ""`, `checked: bool`; signal `toggled(bool checked)`; checked shows a leading `check` |
+| `M3BarPill` | `M3Surface` | per spec §4.2: `popoverOpen`, `physicalWheelDirection`, `activeContainerColor`, `activeContentColor`, `barEdge`, `edgeReach`, `crossSlack`, `pillSize`, `content`; ro `vertical`; signal `scrolled(int deltaStep)` (uses `wheel.mjs`) |
+| `M3AppIcon` | `M3Surface` | per spec §5 |
+| `M3DuotoneClock` | `Item` | per spec §6 (`hoursText`, `minutesText`, `onWallpaper`) |
+| `M3HoldToConfirm` | `QtObject` | per spec §7.2: `armed`, `progress`, ro `holding`; `begin()`, `end()`, `activate()`, `cancel()`; signals `confirmed()`, `tappedTooShort()` |
+| `M3Switch` † | `Item` | `checked: bool`, `uncheckedIcon: string = "close"`, `checkedIcon: string = "check"`, `accessibleName`; signal `toggled(bool checked)`; Space toggles; `Accessible.role: Accessible.CheckBox`, `Accessible.checked` |
+| `M3Slider` | `Item` | per spec §2.3 (`value`, `maxValue`, `icon`, `muted`, `accessibleName`; `moved(real)`; `nudge(real)`); muted track `onSurface` @38% (C13) |
+| `M3TextField` † | `M3Surface` | `text: string`, `placeholderText`, `supportingText`, `errorText: string = ""`, `password: bool = false`, `maxLength: int = 256`, `readOnly: bool`; signals `accepted()`, `edited(string text)`; caps-lock row when `password && KeyboardService.capsLock`; shake gated by `decorativeMotionEnabled` |
+| `M3SearchField` † | `M3Surface` | `text`, `placeholderText`, `accessibleName`, `compact: bool = false` (36 vs 48px); clear button when non-empty; signals `accepted()`, `edited(string)`; `forceInputFocus()` |
+| `M3CircularProgress` † | `Item` | `value: real = 0` (0..1), `indeterminate: bool = false`, `size: real = Tokens.metrics.iconMd`, `trackColor`, `indicatorColor`; indeterminate spin gated by `decorativeMotionEnabled` |
+| `M3LinearProgress` † | `Item` | `value`, `indeterminate`, `trackColor`, `indicatorColor`; height 4 |
+| `M3Popover` | `PanelWindow` | per spec §1.2: `required name`, `cardWidth`, `cardHeight`, `namespace`, `keyboardFocusMode`, `content`; ro `open`, `edge`; uses `popoverPlacement.mjs`; `screen` per `01-architecture.md` §3 |
+| `M3ContextMenu` † | `PopupWindow` | `model: var` (`[{icon?, label, hint?, enabled?, separator?, action: function}]`); `popupAt(item: Item, x: real, y: real)`, `close()`; signal `closed()`; keyboard per spec §2.2 |
+| `M3Tooltip` | `PopupWindow` | `target: Item`, `text: string`, `shown: bool`, `rich: bool = false`; delay 450ms |
+| `M3ScrollBar` † | `Item` | `flickable: Flickable` (required); auto-hide 1200ms; 4px idle / 8px hover |
+
+---
+
+## 6. Bar Widget Contract (`bar/widgets/*Widget.qml`)
+
+`BarWidgetLoader` (spec `02-bar-widgets.md` §8) loads `BarWidgetRegistry.source(type)` and binds these properties into the item. Every widget declares all of them, even if unused:
+
+| Property | Type | Meaning |
+|---|---|---|
+| `options` | `var` | raw stored options (never read directly; G13) |
+| `vertical` | `bool` | host bar orientation |
+| `barEdge` | `string` | `"top"\|"right"\|"bottom"\|"left"` |
+| `barId` | `string` | host bar id (for `Configure bar…`) |
+| `edgeReach`, `crossSlack`, `pillSize` | `real` | hit-area geometry from the loader |
+| `overflowStep` | `int` | set by `BarLayout` (§2.7); `0` = full |
+| ro `overflowSteps` | `int` | number of degrade steps this widget supports (`0` for never-hidden widgets) |
+
+Each widget:
+1. Declares `readonly property var opt: BarWidgetRegistry.resolve("<type>", options, vertical ? "vertical" : "horizontal")` when the type has options.
+2. Popover openers call `ShellState.registerTrigger(name, this)` in `Component.onCompleted` and pass `this` to `togglePopover`.
+3. Sets `accessibleName` and `tooltipText` from live state (`"Wi-Fi Home-5G · Volume 72% · Battery 86%"`).
+4. Uses `font.features: Tokens.typography.tabularFeatures` on every live number.
+5. Opens the widget menu on `rightClicked()` (`01-architecture.md` §5.2).
+
+---
+
+## 7. Surface Contract (`surfaces/<x>/<Root>.qml`)
+
+| Concern | Rule |
+|---|---|
+| Visibility | `visible: <state expression>` (lane value, `NotificationService.toasts.length > 0`, …) |
+| Screen | per `01-architecture.md` §3 |
+| Layer config | the row of `01-architecture.md` §4, verbatim |
+| Escape | `Keys.onEscapePressed: { const c = ShellState.handleEscape(inlineDepth); if (c === "inline") collapseInline() }`; each surface keeps `property int inlineDepth` |
+| Focus on open | keyboard/IPC open → first control gets focus and `Tokens.keyboardModality = true`; pointer open → nothing pre-focused (except the launcher search field and the lock/polkit password fields, which always take focus) |
+| Motion | spatial via `SpringAnimation` + `Tokens.motion.spring*Spatial`, gated by `spatialMotionEnabled`; effects via `durationMs` |
+| Side effects | call service functions only (G08) |
+| Accessibility | every interactive element named; live values in `Accessible.description`; announcements via `Accessible.announce()` where the spec asks |

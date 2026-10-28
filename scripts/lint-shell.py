@@ -8,6 +8,7 @@ Usage:
 Suppress one finding on its line with `// lint-allow Gxx: <reason of 10+ chars>`; every suppression is
 reported so reviewers see it. Rule IDs match the guardrail table; never weaken a rule to make code pass.
 """
+import json
 import re
 import sys
 from pathlib import Path
@@ -22,10 +23,20 @@ ALLOWED_IMPORTS = {
     "Quickshell.Services.Polkit", "Quickshell.Bluetooth",
     "MatShell.Tokens", "MatShell.Services", "MatShell.State", "MatShell.Primitives",
 }
-NON_SUPPRESSIBLE = {"G06", "G07", "G08", "G15", "G17", "G20"}  # architecture rules: fix the design, never silence them
+NON_SUPPRESSIBLE = {"G06", "G07", "G08", "G15", "G17", "G20", "G21", "G22", "G23"}  # architecture rules: fix the design, never silence them
 SPATIAL = r"(?:x|y|width|height|implicitWidth|implicitHeight|scale|radius|cornerRadius|rotation)"
 HTML_IDIOMS = r"(?:\bclassName\b|\bdocument\.|\bwindow\.addEventListener|\buseState\b|\bonClick\s*=|<div\b|\bpx['\"]|\bdisplay:\s*flex)"
-SERVICE_NAMES = r"\b(?:ConfigService|AudioService|BatteryService|MediaService|NetworkService|NotificationService|CompositorService|BrightnessService|TelemetryService|AccessibilityService|ThemeService|KeybindService|BarWidgetRegistry)\b"
+CONTRACTS = json.loads((ROOT / "docs" / "lld" / "contracts.json").read_text(encoding="utf-8"))  # scripts/gen-contracts.py
+SINGLETONS = {k: set(v["members"]) for k, v in CONTRACTS["singletons"].items()}
+PRIMITIVE_OK = {"BarService", "KeyboardService", "ShellState"}
+SERVICE_NAMES = r"\b(?:" + "|".join(sorted(set(SINGLETONS) - PRIMITIVE_OK)) + r")\b"
+SINGLETON_REF = re.compile(r"(?<![\w.])(" + "|".join(sorted(SINGLETONS)) + r")\.([A-Za-z_]\w*)")
+WIDGET_FILES = set(CONTRACTS["widgets"].values())
+COMMANDS = set(json.loads((ROOT / "packaging" / "dependencies.json").read_text(encoding="utf-8"))["commands"])
+STRING = re.compile(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`")
+# G23 exemptions: the one file that reads HOME / XDG_*, and the one that rewrites the seeded placeholder
+G23_ENV_OK = {("MatShell", "Services", "ConfigService.qml")}
+G23_PLACEHOLDER_OK = {("lib", "paths.mjs")}
 
 
 def strip_comments(line):
@@ -47,6 +58,59 @@ def strip_comments(line):
             out.append(c)
         i += 1
     return "".join(out)
+
+
+def blank_strings(code):
+    """Replace string contents with spaces so names and braces inside strings are ignored."""
+    return re.sub(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`", lambda m: m.group(0)[0] + " " * (len(m.group(0)) - 2) + m.group(0)[0], code)
+
+
+def root_members(text):
+    """Names declared directly on a QML file's root object: properties, functions, signals."""
+    names, depth = set(), 0
+    for raw in text.splitlines():
+        code = blank_strings(strip_comments(raw))
+        if depth == 1:
+            m = re.match(r"\s*(?:(?:readonly|required|default)\s+)*property\s+[\w<>.]+\s+(\w+)|\s*function\s+(\w+)|\s*signal\s+(\w+)", code)
+            if m:
+                names.add(next(g for g in m.groups() if g))
+        depth += code.count("{") - code.count("}")
+    return names
+
+
+def token_members():
+    """Tokens.<member> and Tokens.<group>.<member> names, read from the token QML (shell copy first)."""
+    for d in (ROOT / "shell" / "MatShell" / "Tokens", ROOT / "design-system" / "tokens" / "qml"):
+        if (d / "Tokens.qml").exists():
+            top_text = (d / "Tokens.qml").read_text(encoding="utf-8")
+            groups = {g: root_members((d / f"{t}.qml").read_text(encoding="utf-8"))
+                      for g, t in re.findall(r"property\s+QtObject\s+(\w+)\s*:\s*(\w+)", top_text) if (d / f"{t}.qml").exists()}
+            return root_members(top_text), groups
+    return set(), {}
+
+
+TOKEN_TOP, TOKEN_GROUPS = token_members()
+
+
+def expression_at(text, i):
+    """The expression starting at text[i]: a bracketed group up to its match (strings skipped), else the rest of the line."""
+    while i < len(text) and text[i] in " \t":
+        i += 1
+    if i >= len(text) or text[i] not in "[(":
+        end = text.find("\n", i)
+        return text[i:end if end >= 0 else len(text)]
+    depth, j = 0, i
+    while j < len(text):
+        m = STRING.match(text, j)
+        if m:
+            j = m.end()
+            continue
+        depth += text[j] in "[("
+        depth -= text[j] in "])"
+        j += 1
+        if depth == 0:
+            break
+    return text[i:j]
 
 
 def blocks(lines, type_pattern):
@@ -86,13 +150,18 @@ class Linter:
         in_widgets = "widgets" in parts and "bar" in parts
         in_settings = "settings" in parts
         r = lambda n, rule, msg: self.report(rel, n, rule, msg, lines)
+        ps = Path(rel).parts
+        sub = ps[len(ps) - 1 - ps[::-1].index("shell") + 1:] if "shell" in ps else ()  # path below shell/
+        self.contract_files(sub, r)
 
+        self.paths(sub, lines, in_tokens, r)
         if path.suffix == ".mjs":
             for n, raw in enumerate(lines, 1):
                 code = strip_comments(raw)
                 if re.search(r"\b(?:Qt|Quickshell|Tokens|console\.log)\b", code) or re.match(r"\s*import\s+Qt", code):
                     r(n, "G20", "lib/*.mjs must stay pure JS: no Qt, Quickshell, Tokens, or console.log (node must run it)")
             return
+        self.commands(lines, in_services, r)
 
         for n, raw in enumerate(lines, 1):
             code = strip_comments(raw)
@@ -132,6 +201,7 @@ class Linter:
 
         if in_tokens:
             return
+        self.contract_names(path, sub, text, lines, r)
         for i, j, block in blocks(lines, r"PanelWindow"):
             for prop in ("WlrLayershell.namespace", "WlrLayershell.layer", "WlrLayershell.keyboardFocus"):
                 if prop not in block:
@@ -158,6 +228,123 @@ class Linter:
             if "accessibleName" not in block:
                 r(i + 1, "G19", "icon-only control without accessibleName (and tooltip)")
 
+    def commands(self, lines, in_services, r):
+        """G22: every program a Process / execDetached starts is declared in packaging/dependencies.json.
+        Process sites are checked in services only (G08 already rejects a Process anywhere else)."""
+        code = "\n".join(strip_comments(l) for l in lines)
+        aliases = set(re.findall(r"^\s*import\s+\"[^\"]+\.mjs\"\s+as\s+(\w+)", code, re.M))
+        sites = []
+        for i, j, block in (blocks(lines, r"Process") if in_services else ()):
+            for m in re.finditer(r"(?<![\w.])command\s*:", block):
+                sites.append((i + 1 + block.count("\n", 0, m.start()), expression_at(block, m.end())))
+        for m in re.finditer((r"\.command\s*=(?!=)|" if in_services else "") + r"\bexecDetached\s*\(", code):
+            start = m.end() - 1 if m.group(0).endswith("(") else m.end()
+            sites.append((code.count("\n", 0, m.start()) + 1, expression_at(code, start)))
+        seen = set()
+        for n, expr in sites:
+            if (n, expr) in seen:
+                continue
+            seen.add((n, expr))
+            progs = [s[1:-1] for s in re.findall(r"\[\s*(" + STRING.pattern + r")", expr)]
+            if not progs:
+                if not re.match(r"\s*\(?\s*(?:" + "|".join(map(re.escape, aliases)) + r")\.", expr) if aliases else True:
+                    r(n, "G22", "command must be an argument array that starts with a program literal (or come from a lib/ command table)")
+                continue
+            for prog in progs:
+                if prog not in COMMANDS:
+                    r(n, "G22", f"`{prog}` is not declared in packaging/dependencies.json commands (adding one is a contract change, README §4)")
+                elif prog == "sh":
+                    script = re.search(r"[\"']-c[\"']\s*,\s*(" + STRING.pattern + r")", expr)
+                    if not script:
+                        r(n, "G22", "sh -c needs its script as a string literal (R06), so the programs inside can be checked")
+                        continue
+                    for seg in re.split(r"\|\|?|&&|;", script.group(1)[1:-1]):
+                        word = seg.split()[0] if seg.split() else ""
+                        if word and word not in COMMANDS:
+                            r(n, "G22", f"`{word}` inside the sh -c script is not declared in packaging/dependencies.json commands")
+
+    def paths(self, sub, lines, in_tokens, r):
+        """G23: no repository or home paths; only ConfigService reads HOME / XDG_*; relative paths stay inside shell/."""
+        env_ok = in_tokens or tuple(sub[-3:]) in G23_ENV_OK
+        placeholder_ok = tuple(sub[-2:]) in G23_PLACEHOLDER_OK
+        here = sub[:-1]
+        for n, raw in enumerate(lines, 1):
+            code = strip_comments(raw)
+            if not env_ok and re.search(r"\benv\s*\(\s*[\"'](?:HOME|XDG_\w+)[\"']", code):
+                r(n, "G23", "only ConfigService reads HOME / XDG_*: use ConfigService.homeDir / configDir / cacheDir")
+            for m in STRING.finditer(code):
+                s = m.group(0)[1:-1]
+                why = None
+                if re.match(r"(?:\.\./)*(?:design-system|scripts|docs)/", s):
+                    why = "names a repository folder; runtime files live under Quickshell.shellDir + \"/assets/\""
+                elif s.startswith(("~/", "/home/", "/Users/", "/root/")) and not (placeholder_ok and s.startswith("~/.config/mat-shell")):
+                    why = "is a home path: build it from ConfigService.homeDir / configDir / cacheDir"
+                elif re.search(r"\.(?:config|cache)/mat-shell", s) and not placeholder_ok and not env_ok:
+                    why = "spells the config or cache folder: use ConfigService.configDir / cacheDir"
+                elif s.startswith(("./", "../")) and sub:
+                    parts = list(here)
+                    for seg in s.split("/")[:-1]:
+                        if seg == "..":
+                            if not parts:
+                                why = "leaves shell/ (the installed copy has nothing outside it)"
+                                break
+                            parts.pop()
+                        elif seg not in (".", ""):
+                            parts.append(seg)
+                if why:
+                    r(n, "G23", f"\"{s}\" {why}")
+
+    def contract_files(self, sub, r):
+        """G21: a file under shell/ that a closed list governs must be on that list."""
+        name = sub[-1] if sub else ""
+        if sub[:1] == ("lib",) and name.endswith(".mjs") and "/".join(sub[1:]) not in CONTRACTS["lib"]:
+            r(1, "G21", f"lib/{'/'.join(sub[1:])} is not a module in 02-contracts.md §2")
+        elif sub[:2] == ("MatShell", "Services") and name.endswith(".qml") and name[:-4] not in SINGLETONS:
+            r(1, "G21", f"{name} is not a service in 02-contracts.md §3")
+        elif sub[:2] == ("MatShell", "Primitives") and name.endswith(".qml") and name[:-4] not in CONTRACTS["primitives"]:
+            r(1, "G21", f"{name} is not a primitive in 02-contracts.md §5")
+        elif sub[:2] == ("bar", "widgets") and name.endswith(".qml") and name not in WIDGET_FILES:
+            r(1, "G21", f"{name} is not <PascalType>Widget.qml for a widget type in 02-contracts.md §2.3")
+
+    def contract_names(self, path, sub, text, lines, r):
+        """G21: names used on singletons, tokens and lib modules must exist in the contracts / token files."""
+        own = path.stem if "/".join(sub[:2]) in ("MatShell/Services", "MatShell/State") and path.stem in SINGLETONS else None
+        if own:
+            declared = root_members(text)
+            for extra in sorted(declared - SINGLETONS[own]):
+                if not extra.startswith("_"):
+                    n = next((i for i, l in enumerate(lines, 1) if re.search(r"\b(?:property\s+[\w<>.]+|function|signal)\s+" + extra + r"\b", l)), 1)
+                    r(n, "G21", f"{own}.{extra} is not in 02-contracts.md: rename it _{extra} (private) or stop and ask (README §4)")
+            for missing in sorted(SINGLETONS[own] - declared):
+                r(1, "G21", f"{own} does not declare contract member `{missing}` at its root")
+        aliases = {}
+        for raw in lines:
+            m = re.match(r"\s*import\s+\"([^\"]+\.mjs)\"\s+as\s+(\w+)", raw)
+            if m:
+                mm = re.search(r"(?:^|/)lib/(.+\.mjs)$", m.group(1))
+                aliases[m.group(2)] = mm.group(1) if mm else None
+        alias_ref = re.compile(r"(?<![\w.])(" + "|".join(aliases) + r")\.([A-Za-z_]\w*)") if aliases else None
+        for n, raw in enumerate(lines, 1):
+            code = blank_strings(strip_comments(raw))
+            for name, member in SINGLETON_REF.findall(code):  # `<member>Changed` signals count as the member
+                if member.startswith("_") and name != own:
+                    r(n, "G21", f"{name}.{member} is private to {name}")
+                elif member not in SINGLETONS[name] and not (member.endswith("Changed") and member[:-7] in SINGLETONS[name]) and not member.startswith("_"):
+                    r(n, "G21", f"{name}.{member} is not in 02-contracts.md (closed member list)")
+            for m in re.finditer(r"(?<![\w.])Tokens\.(\w+)(?:\.(\w+))?", code):
+                top, sub_name = m.group(1), m.group(2)
+                if TOKEN_TOP and top not in TOKEN_TOP:
+                    r(n, "G21", f"Tokens.{top} does not exist in Tokens.qml")
+                elif sub_name and top in TOKEN_GROUPS and sub_name not in TOKEN_GROUPS[top]:
+                    r(n, "G21", f"Tokens.{top}.{sub_name} does not exist in the {top} token file")
+            if alias_ref:
+                for alias, member in alias_ref.findall(code):
+                    mod = aliases[alias]
+                    if mod is None or mod not in CONTRACTS["lib"]:
+                        r(n, "G21", f"{alias} imports a module that is not in 02-contracts.md §2")
+                    elif member not in CONTRACTS["lib"][mod]:
+                        r(n, "G21", f"{alias}.{member}: {mod} does not export {member} (02-contracts.md §2)")
+
     def run(self, targets):
         files = []
         for t in targets:
@@ -182,12 +369,19 @@ def main(argv):
         for f in files:
             lint = Linter()
             lint.lint_file(f)
-            got = sorted({rule for _, _, rule, _, sup in lint.findings if not sup})
+            hits = [rule for _, _, rule, _, sup in lint.findings if not sup]
             m = re.search(r"//\s*expect:\s*(.*)", f.read_text())
-            want = sorted(m.group(1).split()) if m and m.group(1).strip() != "none" else []
-            if got != want:
+            want = m.group(1).split() if m and m.group(1).strip() != "none" else []
+            # `G03` = the rule fires at least once; `G21=4` = it fires exactly four times
+            ok = sorted({w.split("=")[0] for w in want}) == sorted(set(hits)) and all(
+                hits.count(w.split("=")[0]) == int(w.split("=")[1]) for w in want if "=" in w)
+            if not ok:
                 failures += 1
-                print(f"FAIL {f.relative_to(ROOT)}: expected {want or 'none'}, got {got or 'none'}")
+                got = " ".join(f"{k}={hits.count(k)}" for k in sorted(set(hits))) or "none"
+                print(f"FAIL {f.relative_to(ROOT)}: expected {' '.join(want) or 'none'}, got {got}")
+                for _, line, rule, msg, sup in lint.findings:
+                    if not sup:
+                        print(f"     {line}: {rule} {msg}")
         if failures:
             sys.exit(1)
         print(f"  ✓ lint-shell self-test: {len(files)} fixtures behave as declared")

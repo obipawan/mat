@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""next-task.py — where am I, is anything wrong, and exactly what do I do next?
+
+Usage:
+  python3 scripts/next-task.py   # at the start of every session, and after every gate seal
+
+It needs no git: the state lives in the folder (the plan's checkboxes and docs/state, see scripts/matstate.py).
+
+Exit codes: 0 = a task to do (or all done), 2 = checkpoint: stop for review, 3 = stop: a human must act.
+"""
+import json
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True  # keep scripts/__pycache__ out of the working tree
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import matstate  # noqa: E402
+import planlib  # noqa: E402
+
+ROOT = planlib.ROOT
+CONTRACTS = ROOT / "docs" / "lld" / "02-contracts.md"
+
+RULES = """\
+RULES (all of them, every task):
+  1. Do only this task, and touch only its Files. One task per gate seal.
+  2. Write the tests first, copying every assertion in the card verbatim; then run the --red step.
+  3. Use only names from the contract excerpt below. Private QML members start with `_`; lib helpers stay unexported.
+  4. Before using a Quickshell/Qt type or member that is not in docs/lld/03-guardrails.md §5, run
+     `python3 scripts/qs-api.py <Type> <member>`. Not found → do not use it; stop and ask instead.
+  5. Never edit sealed tests, lint fixtures, docs/lld/, design-system/, docs/handoffs/ (except your receipt),
+     docs/state/, scripts/ (unless the card lists the file), or the plan. Never create checkpoint or review files.
+  6. Never seal, revert, or restore files yourself (no `matstate.py seal/revert`, no git). The gate seals for you.
+  7. When a check fails, read its message and fix the cause in your own files. Do not weaken a test or a rule,
+     do not add lint-allow comments to silence G06/G07/G08/G15/G17/G20/G21, and do not "simplify" the task.
+  8. No TODOs, stubs, placeholder values, or commented-out code. If you cannot finish without a decision (a
+     missing contract name, a spec conflict, an API that qs-api.py cannot find, a test that seems wrong), run
+     `python3 scripts/task-gate.py N --stuck "<what you tried, what failed, what you need decided>"` and stop.
+  9. Do not open showcase/index.html (a 3000-line visual reference; never port its HTML/CSS/JS).
+ 10. Work in short sessions: after each seal, run this script again; start a fresh session when your
+     context is long. This script, not your memory, says where you are."""
+
+
+def run(cmd, timeout=60):
+    try:
+        p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, (p.stdout + p.stderr).strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        return 127, str(e)
+
+
+def stop(msg, code=3):
+    print(msg)
+    sys.exit(code)
+
+
+def fix_modes():
+    """Plain copies can drop the executable bit; the scripts call each other, so restore it."""
+    for p in (ROOT / "scripts").glob("*.sh"):
+        p.chmod(p.stat().st_mode | 0o111)
+
+
+def audit(n, card):
+    """The history in docs/state is intact, task seals stayed in their lane, and unsealed work belongs to task n."""
+    problems = matstate.verify()
+    for e in matstate.entries():
+        if e["kind"] == "task" and any(p.startswith(("docs/handoffs/checkpoint-", "docs/handoffs/review-task-", "docs/state/"))
+                                       for p in e["changed"]):
+            problems.append(f"seal {e['seal']} (Task {e['task']}) wrote reviewer files; only a reviewer writes these")
+    if n is None:
+        return problems
+    allowed = set(card["files"]["create"]) | set(card["files"]["modify"]) | {
+        f"docs/handoffs/task-{n:02d}.md", "docs/handoffs/BLOCKED.md", "tests/test-lock.json", planlib.PLAN.relative_to(ROOT).as_posix()}
+    outside = [p for p in matstate.changes() if p not in allowed and not p.startswith(f"docs/evidence/task-{n:02d}/")]
+    if outside:
+        problems.append(f"files changed outside Task {n} since the last seal: " + ", ".join(outside[:12]) +
+                        (" …" if len(outside) > 12 else "") + ". Do not undo them yourself.")
+    return problems
+
+
+def version(cmd, pattern=r"(\d+)\.(\d+)(?:\.(\d+))?"):
+    rc, out = run(cmd)
+    m = re.search(pattern, out) if rc == 0 else None
+    return tuple(int(x or 0) for x in m.groups()) if m else None
+
+
+def doctor(n):
+    """Required tools for task n: [(name, ok, detail)]."""
+    rows = [("python ≥ 3.11", sys.version_info >= (3, 11), sys.version.split()[0])]
+    node = version(["node", "--version"])
+    rows.append(("node ≥ 22", bool(node and node >= (22, 0, 0)), ".".join(map(str, node)) if node else "missing"))
+    if n >= planlib.LINUX_FROM:
+        rows.append(("Linux", sys.platform.startswith("linux"), sys.platform))
+        qs = version(["qs", "--version"])
+        rows.append(("quickshell ≥ 0.3.0", bool(qs and qs >= (0, 3, 0)), ".".join(map(str, qs)) if qs else "missing (`qs`)"))
+        import os
+        rows.append(("Hyprland session", bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")),
+                     "HYPRLAND_INSTANCE_SIGNATURE set" if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") else "not set"))
+        for tool in ["matugen"] + (["grim"] if n in planlib.SCREENSHOT_TASKS else []):
+            rows.append((tool, shutil.which(tool) is not None, "found" if shutil.which(tool) else "missing"))
+        rc, _ = run(["python3", str(ROOT / "scripts" / "fetch-fonts.py"), "--check"])
+        rows.append(("shipped fonts", rc == 0, "installed" if rc == 0 else "missing: run python3 scripts/fetch-fonts.py"))
+    return rows
+
+
+def contract_excerpt(card):
+    """The 02-contracts.md rows and sections that define what this task's files must declare."""
+    text = CONTRACTS.read_text(encoding="utf-8")
+    sections = re.split(r"(?=^#{2,3} \d)", text, flags=re.M)
+    contracts = json.loads((ROOT / "docs" / "lld" / "contracts.json").read_text(encoding="utf-8"))
+    picked = []
+    created = [Path(p) for p in card["files"]["create"] if p.startswith("shell/")]
+
+    def add(chunk):
+        if chunk and chunk not in picked:
+            picked.append(chunk.strip())
+
+    for p in created:
+        rel = p.as_posix()[len("shell/lib/"):] if p.as_posix().startswith("shell/lib/") else None
+        if rel and rel in contracts["lib"]:
+            sec = next((s for s in sections if s.startswith("### ") and f"`{rel}`" in s.splitlines()[0]), None)
+            if sec:
+                add(sec)
+            else:  # a module inside the §2.12 table: its rows (continuation rows have an empty first cell)
+                rows, current = [], None
+                for line in next(s for s in sections if s.startswith("### 2.12")).splitlines():
+                    cell = line.split("|")[1].strip() if line.startswith("|") and line.count("|") > 2 else None
+                    if cell:
+                        current = cell.strip("`")
+                    if line.startswith("|") and current == rel:
+                        rows.append(line)
+                add("### 2.12 Domain helpers — " + rel + "\n| Module | Export | Contract |\n|---|---|---|\n" + "\n".join(rows))
+        elif p.stem in contracts["singletons"]:
+            if p.stem == "ConfigService":
+                add(next(s for s in sections if s.startswith("### 3.1")))
+            elif p.stem == "ShellState":
+                add(next(s for s in sections if s.startswith("## 4.")))
+            else:
+                sec = next(s for s in sections if s.startswith("### 3.2"))
+                head = "\n".join(sec.splitlines()[:5])
+                add(head + "\n" + "\n".join(l for l in sec.splitlines() if l.startswith(f"| `{p.stem}` |")))
+        elif p.stem in contracts["primitives"]:
+            sec = next(s for s in sections if s.startswith("## 5."))
+            intro = sec.split("\n| Primitive")[0]
+            add(intro + "\n| Primitive | Root | Public API |\n|---|---|---|\n" +
+                "\n".join(l for l in sec.splitlines() if re.match(rf"\| `{p.stem}` ", l)))
+        elif p.parts[1:3] == ("bar", "widgets"):
+            add(next(s for s in sections if s.startswith("## 6.")))
+        elif p.parts[1:2] == ("surfaces",):
+            add(next(s for s in sections if s.startswith("## 7.")))
+    return "\n\n".join(picked)
+
+
+def brief(n, card):
+    lines = [
+        f"NEXT: Task {n} — {card['title']}   ({card['phase']})",
+        "",
+        "DO EXACTLY THIS:",
+        "  1. Once per session read docs/lld/README.md §2–§4 and docs/lld/03-guardrails.md.",
+        "     Read the spec sections the card cites, and nothing else.",
+        "  2. Write the tests the card asks for (unit tests and/or tests/smoke/ipc-script.txt lines).",
+        f"  3. python3 scripts/task-gate.py {n} --red      → must report a failure (the code does not exist yet)",
+        "  4. Implement the card's Files.",
+        f"  5. python3 scripts/task-gate.py {n}            → fix what it reports; when the checks pass it asks you to fill",
+        f"     docs/handoffs/task-{n:02d}.md (Agent notes, Manual checks); fill it and run the gate again. It seals the task.",
+        "  6. python3 scripts/next-task.py",
+        "",
+        RULES,
+        "",
+        "=" * 100,
+        f"TASK CARD (docs/superpowers/plans/…-implementation-plan.md, Task {n})",
+        "=" * 100,
+        f"### Task {n}: {card['title']}",
+        card["body"].strip(),
+    ]
+    review = planlib.HANDOFFS / f"review-task-{n:02d}.md"
+    if review.exists():
+        lines += ["", "=" * 100, f"REVIEWER NOTES ({review.relative_to(ROOT)}): an earlier attempt was rejected; fix every point", "=" * 100,
+                  review.read_text(encoding="utf-8").strip()]
+    if card["phase_intro"]:
+        lines += ["", "=" * 100, f"PHASE NOTES ({card['phase']}): apply to every task in this phase", "=" * 100,
+                  card["phase_intro"]]
+    excerpt = contract_excerpt(card)
+    if excerpt:
+        lines += ["", "=" * 100, "CONTRACT EXCERPT (docs/lld/02-contracts.md): the exact names your files must declare", "=" * 100,
+                  excerpt]
+    return "\n".join(lines)
+
+
+def main():
+    if not matstate.LOG.exists():
+        stop("STOP: docs/state/ is missing. Copy the whole project folder, including docs/state/, and run this again.")
+    fix_modes()
+    print("== Mat Shell: next step ==")
+    if planlib.BLOCKED.exists():
+        task = re.search(r"Task (\d+)", planlib.BLOCKED.read_text(encoding="utf-8"))
+        archive = task and (ROOT.parent / f"mat-blocked-{int(task.group(1)):02d}.tar.gz").exists()
+        todo = ("The work is already archived; end the session." if archive or not task else
+                f"Run `bash scripts/checkpoint.sh --blocked {task.group(1)}` to archive the work, then end the session.")
+        stop(f"STOP (blocked): {planlib.BLOCKED.relative_to(ROOT)} exists. Do not change code. {todo}\n"
+             "Tell the human what it says:\n\n" + planlib.BLOCKED.read_text(encoding="utf-8")[:3000])
+    cards = planlib.tasks()
+    n = planlib.next_task(cards)
+    problems = audit(n, cards.get(n))
+    if problems:
+        stop("STOP (history): the project changed outside the gate. Do not change or restore anything; tell the human:\n  "
+             + "\n  ".join(problems))
+    done = [n for n in sorted(cards) if cards[n]["done"]]
+    print(f"Done: {len(done)} of {len(cards)} tasks (last: Task {done[-1] if done else '—'})")
+    cp = planlib.pending_checkpoint(cards)
+    if cp is not None:
+        stop(f"""CHECKPOINT after Task {cp} ({cards[cp]['phase']}). STOP working now.
+  1. Run `bash scripts/checkpoint.sh {cp}`
+  2. Tell the human: "Checkpoint {cp} reached. The archive path is printed above. Please have it reviewed."
+  3. End the session. Work continues only after the reviewer's copy (with {planlib.checkpoint_path(cp).relative_to(ROOT)}) comes back.""", 2)
+    if n is None:
+        print("All tasks are done. Run `bash scripts/verify-design-system.sh` and `bash scripts/smoke-shell.sh`, then tell the human.")
+        return
+    if matstate.changes():
+        print(f"NOTE: unsealed changes exist; they are your work on Task {n} so far. Continue it and finish with the gate.")
+    rows = doctor(n)
+    for name, ok, detail in rows:
+        print(f"  {'✓' if ok else '✗'} {name}: {detail}")
+    if not all(ok for _, ok, _ in rows):
+        missing = ", ".join(name for name, ok, _ in rows if not ok)
+        stop(f"STOP (environment): Task {n} needs {missing}. Install it or tell the human; do not work around it.")
+    print()
+    print(brief(n, cards[n]))
+
+
+if __name__ == "__main__":
+    main()

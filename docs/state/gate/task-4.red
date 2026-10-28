@@ -1,0 +1,1 @@
+FAIL as expected before implementation: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/Users/pawan.kumarm/workspace/mat/shell/lib/barConfig.mjs' imported from /Users/pawan.kumarm/workspace/mat/tests/lib/barConfig.test.mjs

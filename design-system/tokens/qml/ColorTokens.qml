@@ -7,7 +7,7 @@ import Quickshell.Io
  * ColorTokens.qml — Material 3 colour roles fed live by matugen + Dual-Surface Engine resolvers.
  *
  * Pipeline (01-color-and-surfaces.md §1): matugen >= 4.0 renders design-system/tokens/matugen/theme.json.tpl
- * into ~/.config/mat-shell/theme.json with BOTH polarities. Dark/Light therefore switches instantly between
+ * into $XDG_CONFIG_HOME/mat-shell/theme.json (default ~/.config) with BOTH polarities. Dark/Light therefore switches instantly between
  * the two blocks without re-running matugen, and role bindings are never broken by file reloads.
  *
  * Defaults are matugen's own output for the M3 baseline seed #6750A4 (tokens/matugen/theme.baseline.json),
@@ -30,9 +30,19 @@ Singleton {
     // scheme-monochrome / scheme-neutral; status colours then fall back to fixed, meaning-preserving hues.
     readonly property bool harmonizedStatus: schemeVariant !== "scheme-monochrome" && schemeVariant !== "scheme-neutral"
 
+    // Same rule as paths.userDirs (docs/lld/02-contracts.md §2.13): an absolute $XDG_CONFIG_HOME, else $HOME/.config.
+    // Repeated here because tokens cannot import services; ConfigService.configDir resolves to the same folder.
+    readonly property string _configHome: {
+        const xdg = Quickshell.env("XDG_CONFIG_HOME")
+        const home = Quickshell.env("HOME")
+        if (typeof xdg === "string" && xdg.startsWith("/"))
+            return xdg.replace(/\/+$/, "")
+        return (typeof home === "string" && home.startsWith("/") ? home.replace(/\/+$/, "") : "") + "/.config"
+    }
+
     FileView {
         id: themeFile
-        path: Quickshell.env("HOME") + "/.config/mat-shell/theme.json"
+        path: root._configHome + "/mat-shell/theme.json"
         watchChanges: true
         blockLoading: true   // tiny file; avoids a startup flash of baseline colours
         onFileChanged: reloadDebounce.restart()

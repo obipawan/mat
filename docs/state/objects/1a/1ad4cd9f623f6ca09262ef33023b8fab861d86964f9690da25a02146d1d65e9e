@@ -1,0 +1,25 @@
+// Small pure helpers shared by every lib module (docs/lld/02-contracts.md §2.1).
+
+export function clamp(v, lo, hi) {
+  if (Number.isNaN(v)) return lo;
+  return Math.min(hi, Math.max(lo, v));
+}
+
+// Equality of JSON values: objects by keys (any order), arrays by position.
+export function deepEqual(a, b) {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) return a.length === b.length && a.every((x, i) => deepEqual(x, b[i]));
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((k) => k in b && deepEqual(a[k], b[k]));
+}
+
+// QML's JS engine has no structuredClone; JSON round-trip semantics are the contract.
+export function clone(v) {
+  return v === undefined ? undefined : JSON.parse(JSON.stringify(v));
+}
+
+export function pascalCase(s) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}

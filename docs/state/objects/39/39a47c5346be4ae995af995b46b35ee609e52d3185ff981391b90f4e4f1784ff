@@ -1,0 +1,37 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { shouldToast, toastTimeoutMs, sanitizeBody, groupHistory } from "../../shell/lib/notifications.mjs";
+
+test("shouldToast: Do Not Disturb lets only critical through", () => {
+  assert.equal(shouldToast("normal", true), false); assert.equal(shouldToast("critical", true), true);
+});
+
+test("toastTimeoutMs: critical stays; the app's timeout wins; else low 4s, normal 6s", () => {
+  assert.equal(toastTimeoutMs("critical", 3000), 0); assert.equal(toastTimeoutMs("normal", -1), 6000);
+  assert.equal(toastTimeoutMs("low", 0), 4000); assert.equal(toastTimeoutMs("normal", 9000), 9000);
+});
+
+test("sanitizeBody: keeps safe tags and http(s) links, drops the rest, escapes text", () => {
+  assert.equal(sanitizeBody('<b>Hi</b><script>x()</script><a href="javascript:alert(1)">l</a><a href="https://e.com" onclick="x">ok</a> 1 < 2'),
+    '<b>Hi</b>x()l<a href="https://e.com">ok</a> 1 &lt; 2');
+});
+
+test("groupHistory: groups by app, newest first", () => {
+  assert.deepEqual(groupHistory([{ id: 1, appName: "A", time: 1 }, { id: 2, appName: "B", time: 3 }, { id: 3, appName: "A", time: 2 }])
+    .map(g => [g.appName, g.items.map(i => i.id)]), [["B", [2]], ["A", [3, 1]]]);
+});
+
+// Contract details beyond the card (02-contracts.md §2.12)
+
+test("sanitizeBody: attributes on kept tags are dropped; br, i, u survive; & and > are escaped", () => {
+  assert.equal(sanitizeBody('<i class="x">a</i><br/><u>b</u> & c > d'), "<i>a</i><br><u>b</u> &amp; c &gt; d");
+});
+
+test("sanitizeBody: a quote in a link is escaped; a stray closing tag is dropped", () => {
+  assert.equal(sanitizeBody("<a href='https://e.com/?q=\"x\"'>q</a></a></p>"), '<a href="https://e.com/?q=&quot;x&quot;">q</a>');
+});
+
+test("shouldToast without DND, and an unknown urgency times out like normal", () => {
+  assert.equal(shouldToast("low", false), true);
+  assert.equal(toastTimeoutMs("loud", 0), 6000);
+});

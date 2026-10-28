@@ -19,8 +19,10 @@ Singleton {
         return Math.round(px * textScale)
     }
 
-    readonly property string familySans: "Google Sans Text"
-    readonly property string familyDisplay: "Google Sans"
+    // Google Sans Flex (SIL OFL 1.1) is one variable family for both roles: its opsz axis covers text and display
+    // sizes. Every font here ships with the mat-shell package (packaging/dependencies.json "fonts").
+    readonly property string familySans: "Google Sans Flex"
+    readonly property string familyDisplay: "Google Sans Flex"
     readonly property string familyEditorial: "Instrument Serif"
     readonly property string familyMono: "JetBrains Mono"
     readonly property string familyIcons: "Material Symbols Rounded"

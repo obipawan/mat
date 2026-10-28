@@ -1,0 +1,172 @@
+{
+  "tests/lib/barConfig.test.mjs": {
+    "mode": "append",
+    "bytes": 7931,
+    "sha256": "d36b309b6c7295e194d5ebc8d3b2539dda905a04a6b0801e326ff78fc96f808a"
+  },
+  "tests/lib/barGeometry.test.mjs": {
+    "mode": "append",
+    "bytes": 5564,
+    "sha256": "def12c87f2a4e2e2703bc4eae4f26af3347d59c3aeba791981f0418994092f27"
+  },
+  "tests/lib/clockFormat.test.mjs": {
+    "mode": "append",
+    "bytes": 2624,
+    "sha256": "1619eb4b3716624ebcaf211c08b568509470c81283227e70f05eff8b22f4eb58"
+  },
+  "tests/lib/contracts.test.mjs": {
+    "mode": "append",
+    "bytes": 1362,
+    "sha256": "43ad903c45f5150a95ba8c0e536217059cf94bf888c3cf8e6ea000f7caf826e8"
+  },
+  "tests/lib/generated.test.mjs": {
+    "mode": "append",
+    "bytes": 720,
+    "sha256": "6f57c4c496f3b102a9b287d926a9a24f61ca141c172dcc8218c216ad10f041cd"
+  },
+  "tests/lib/hyprParse.test.mjs": {
+    "mode": "append",
+    "bytes": 1923,
+    "sha256": "7dcb3984e4283fbdf766e97bc93dbe4d4aa5c766d0a27efd47a3ad0ae7af4c2b"
+  },
+  "tests/lib/keybinds.test.mjs": {
+    "mode": "append",
+    "bytes": 6148,
+    "sha256": "01708b9395482575085453b6cc84c3bd3da35560b145f52b7d7697af863b7ffe"
+  },
+  "tests/lib/launcherQuery.test.mjs": {
+    "mode": "append",
+    "bytes": 3614,
+    "sha256": "fed5d6da871b04930652d1848445e5198f724d8233d6c656c184e3ffacc16ee4"
+  },
+  "tests/lib/notifications.test.mjs": {
+    "mode": "append",
+    "bytes": 2240,
+    "sha256": "db5b27d290e35211b0cb5ae08d36efe902729f9b6291779366242873ba70b35b"
+  },
+  "tests/lib/overflow.test.mjs": {
+    "mode": "append",
+    "bytes": 1669,
+    "sha256": "4e0fa8b7785cb6b36ab37cce67910737e074bf6a96d399916a02752273e88df4"
+  },
+  "tests/lib/popoverPlacement.test.mjs": {
+    "mode": "append",
+    "bytes": 2393,
+    "sha256": "c90b0ef7f844abc5f9e42a43f3ef7c69132b7794c8559bd42e121d8d8a075142"
+  },
+  "tests/lib/session.test.mjs": {
+    "mode": "append",
+    "bytes": 1624,
+    "sha256": "bea28c994beb8ec11345150d57c25ef2f65b643a3b7a02e66d534aa41489533f"
+  },
+  "tests/lib/shellReducer.test.mjs": {
+    "mode": "append",
+    "bytes": 5062,
+    "sha256": "74750a3ccd1e55811fb5185e477fd54a60c39035cc2f76ee3ba75696a0bd2664"
+  },
+  "tests/lib/telemetry.test.mjs": {
+    "mode": "append",
+    "bytes": 1261,
+    "sha256": "6023d4e6d71fa06b4d24a5c91faf95627f9dd65ae5cc082ed717b90813d85495"
+  },
+  "tests/lib/util.test.mjs": {
+    "mode": "append",
+    "bytes": 806,
+    "sha256": "cb078d3879fa7ec83c9112a2d77d3fa540b78ffe204d875e61f4698e05928bce"
+  },
+  "tests/lib/weather.test.mjs": {
+    "mode": "append",
+    "bytes": 3044,
+    "sha256": "0a489359ed3390d09a289092ee0aa09aa44a50cbcadf23c68b08e127cdeae68e"
+  },
+  "tests/lib/wheel.test.mjs": {
+    "mode": "append",
+    "bytes": 1710,
+    "sha256": "cad5a7c9dcc6b1b259eac3e74c3ba5ef3eefb6d00c6767b35062d69ab004c9dd"
+  },
+  "tests/lib/widgetCatalog.test.mjs": {
+    "mode": "append",
+    "bytes": 1288,
+    "sha256": "9313c6818644bdbd28cfc24d89c4d34f850a477e24079135da90181dcac00c2b"
+  },
+  "tests/lib/widgetOptions.test.mjs": {
+    "mode": "append",
+    "bytes": 5818,
+    "sha256": "cfe529d0bd1acd44b09b36fec962df66bfe503dfc3e5f1f9921abc60618d6ad7"
+  },
+  "tests/smoke/ipc-script.txt": {
+    "mode": "append",
+    "bytes": 302,
+    "sha256": "839eb90b0ea74757490966936ca4aa08d1c4e79f74eb2a189568166e63637279"
+  },
+  "scripts/lint-fixtures/shell/MatShell/Primitives/M3Switch.qml": {
+    "mode": "exact",
+    "bytes": 175,
+    "sha256": "b675e6dbe9a565ede23a010f7946e6e466f45543c4b10b443e903a9878dded08"
+  },
+  "scripts/lint-fixtures/shell/MatShell/Services/BatteryService.qml": {
+    "mode": "exact",
+    "bytes": 395,
+    "sha256": "b252fc927a808f47b5ee36779607e742baab9bade93a92768222b618736b880f"
+  },
+  "scripts/lint-fixtures/shell/MatShell/Services/CacheService.qml": {
+    "mode": "exact",
+    "bytes": 171,
+    "sha256": "da59c6185c9feee65d181cc251536fb864e9b99914c669519dfd60984b5c441b"
+  },
+  "scripts/lint-fixtures/shell/MatShell/Services/WeatherService.qml": {
+    "mode": "exact",
+    "bytes": 587,
+    "sha256": "4117db00ccf7a4e76090271f5ab458ea86a2a5f4f4208a62ae8099136776a204"
+  },
+  "scripts/lint-fixtures/shell/bar/widgets/ClockWidget.qml": {
+    "mode": "exact",
+    "bytes": 1061,
+    "sha256": "6585b97b208375e60f64ff7f10ed19a43c83ca43f00869e2f6c17f53f1fc521c"
+  },
+  "scripts/lint-fixtures/shell/bar/widgets/MediaWidget.qml": {
+    "mode": "exact",
+    "bytes": 580,
+    "sha256": "d9e474cda533a465efc1f729656433d7c00cf77eb3857dac1d2742325d9ad382"
+  },
+  "scripts/lint-fixtures/shell/lib/fancyMath.mjs": {
+    "mode": "exact",
+    "bytes": 133,
+    "sha256": "78a97c9aa0d4376aec5c43496a2a5ce8cfcace72eecf782c754182aebf5c9826"
+  },
+  "scripts/lint-fixtures/shell/lib/util.mjs": {
+    "mode": "exact",
+    "bytes": 91,
+    "sha256": "79ee5eaa455ecbd1400a9d38b2e808496531f241a1297b50b34d403debf22220"
+  },
+  "scripts/lint-fixtures/shell/lib/wheel.mjs": {
+    "mode": "exact",
+    "bytes": 70,
+    "sha256": "88a856bae4a42f6013cb0dfc4b2b6c6fad1f5510692a03259156ec8b6f726ecd"
+  },
+  "scripts/lint-fixtures/shell/surfaces/launcher/BadFloating.qml": {
+    "mode": "exact",
+    "bytes": 86,
+    "sha256": "b2fc3d8d454f42b4f7f68d845d4394ddb7a27981d6e0e7bb30d0a41c29d368d8"
+  },
+  "scripts/lint-fixtures/shell/surfaces/osd/ContractRefs.qml": {
+    "mode": "exact",
+    "bytes": 1007,
+    "sha256": "f8fccdfcc21a4597a77081cb1243b2959b8628b591b74df47a376f1d795d71a8"
+  },
+  "scripts/lint-fixtures/shell/surfaces/power/BadSurface.qml": {
+    "mode": "exact",
+    "bytes": 338,
+    "sha256": "ff13c89a97a5f195fe52d04c54dd42969faabce1cc34dacbfab8c926eb809cc8"
+  },
+  "scripts/lint-fixtures/shell/surfaces/power/GoodSurface.qml": {
+    "mode": "exact",
+    "bytes": 650,
+    "sha256": "0670f89a7fc4332179899779464c9712b992f3f0aa34258f6238b53623263972"
+  },
+  "scripts/lint-fixtures/shell/surfaces/power/SuppressArchitecture.qml": {
+    "mode": "exact",
+    "bytes": 154,
+    "sha256": "d2e5d1d1d954858cdc04a221fbe35dba694da5d91df805f9d9a853838556362a"
+  }
+}

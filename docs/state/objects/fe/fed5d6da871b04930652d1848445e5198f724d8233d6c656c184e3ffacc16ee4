@@ -1,0 +1,65 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { parseQuery, fuzzyScore, rankApps } from "../../shell/lib/launcherQuery.mjs";
+
+test("parseQuery: prefixes pick the mode; the term is trimmed", () => {
+  assert.deepEqual(parseQuery("= 2+2"), { mode: "calc", term: "2+2" });
+  assert.deepEqual(parseQuery("win fire"), { mode: "win", term: "fire" });
+  assert.deepEqual(parseQuery("winter"), { mode: "apps", term: "winter" });
+  assert.deepEqual(parseQuery(":smile"), { mode: "emoji", term: "smile" });
+  assert.deepEqual(parseQuery("> lock"), { mode: "cmd", term: "lock" });
+  assert.deepEqual(parseQuery("clip"), { mode: "clip", term: "" });
+});
+
+test("fuzzyScore: a prefix beats a subsequence; no match scores 0", () => {
+  assert.ok(fuzzyScore("fi", "Firefox") > fuzzyScore("fi", "Profile Manager"));
+  assert.equal(fuzzyScore("xyz", "Firefox"), 0);
+});
+
+test("rankApps: an empty term ranks by usage", () => {
+  const apps = [{ id: "a", name: "Alpha", genericName: "", keywords: [] }, { id: "b", name: "Beta", genericName: "", keywords: [] }];
+  assert.equal(rankApps("", apps, { b: 5 })[0].id, "b");
+});
+
+// Contract details beyond the card (02-contracts.md §2.12)
+
+test("fuzzyScore: prefix 300 − len, word start 200 − len, subsequence 100 − gaps, case-insensitive", () => {
+  assert.equal(fuzzyScore("fi", "Firefox"), 293);
+  assert.equal(fuzzyScore("man", "Profile Manager"), 185);
+  assert.equal(fuzzyScore("fm", "File Manager"), 96);
+  assert.equal(fuzzyScore("FIRE", "firefox"), 293);
+  assert.equal(fuzzyScore("", "Firefox"), 0);
+});
+
+test("rankApps: drops non-matches, matches keywords and generic names, ties by usage then name, honours limit", () => {
+  const apps = [
+    { id: "ff", name: "Firefox", genericName: "Web Browser", keywords: ["internet"] },
+    { id: "ch", name: "Chromium", genericName: "Web Browser", keywords: [] },
+    { id: "fi", name: "Files", genericName: "File Manager", keywords: [] },
+  ];
+  assert.deepEqual(rankApps("web", apps, {}).map(a => a.id), ["ch", "ff"]);
+  assert.deepEqual(rankApps("web", apps, { ff: 2 }).map(a => a.id), ["ff", "ch"]);
+  assert.deepEqual(rankApps("internet", apps, {}).map(a => a.id), ["ff"]);
+  assert.equal(rankApps("", apps, {}, 2).length, 2);
+});
+
+test("parseQuery: exactly win, leading spaces, plain apps", () => {
+  assert.deepEqual(parseQuery("win"), { mode: "win", term: "" });
+  assert.deepEqual(parseQuery("  =1"), { mode: "calc", term: "1" });
+  assert.deepEqual(parseQuery("  fire  "), { mode: "apps", term: "fire" });
+});
+
+// Checkpoint 10 review fixes
+
+test("rankApps: name ties sort case-insensitively; keywords may be an array-like", () => {
+  const apps = [{ id: "z", name: "beta", genericName: "", keywords: [] }, { id: "a", name: "Alpha", genericName: "", keywords: [] }];
+  assert.deepEqual(rankApps("", apps, {}).map(a => a.id), ["a", "z"]);
+  const listLike = [{ id: "w", name: "W", genericName: "", keywords: { length: 1, 0: "browser" } }];
+  assert.equal(rankApps("brow", listLike, {})[0].id, "w");
+});
+
+test("rankApps: identical and case-only name ties keep input order on any sort; names compare by code point", () => {
+  assert.deepEqual(rankApps("", [{ id: "2", name: "Files", keywords: [] }, { id: "1", name: "Files", keywords: [] }], {}).map(a => a.id), ["2", "1"]);
+  assert.deepEqual(rankApps("", [{ id: "u", name: "files", keywords: [] }, { id: "U", name: "Files", keywords: [] }], {}).map(a => a.id), ["u", "U"]);
+  assert.deepEqual(rankApps("", [{ id: "e", name: "\u{1F600}", keywords: [] }, { id: "h", name: "\uFF61", keywords: [] }], {}).map(a => a.id), ["h", "e"]);
+});

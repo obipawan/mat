@@ -30,7 +30,10 @@ mat/
 │   │   │   └── barPresets.mjs              #   from m3-tokens.json modes.bars.presets + guardrails
 │   │   ├── util.mjs  barConfig.mjs  barGeometry.mjs  widgetCatalog.mjs  widgetOptions.mjs  overflow.mjs
 │   │   ├── shellReducer.mjs  popoverPlacement.mjs  wheel.mjs  clockFormat.mjs  keybinds.mjs
-│   │   └── notifications.mjs  launcherQuery.mjs  telemetry.mjs  session.mjs  weather.mjs  hyprParse.mjs
+│   │   ├── notifications.mjs  launcherQuery.mjs  telemetry.mjs  session.mjs  weather.mjs  hyprParse.mjs
+│   │   └── paths.mjs                       # owner-built (plan "Owner-Built Files"): XDG user folders, matugen seeding
+│   ├── assets/                             # files the shell reads at runtime, via Quickshell.shellDir (07-distribution §3)
+│   │   └── matugen/                        #   GENERATED copy of design-system/tokens/matugen/{config.toml,theme.json.tpl}
 │   ├── bar/
 │   │   ├── Bars.qml                        # Variants over BarService.instances → BarWindow
 │   │   ├── BarWindow.qml  BarLayout.qml  BarWidgetLoader.qml  PrivacyFallback.qml
@@ -60,13 +63,25 @@ mat/
 │               └── bars/BarSectionsEditor.qml WidgetChip.qml WidgetPalette.qml WidgetOptionsForm.qml
 │                        WidgetOptionsHeader.qml OptionRow.qml BarPreview.qml
 ├── tests/
-│   ├── lib/<module>.test.mjs               # node:test unit tests, one per lib module
-│   └── smoke/ipc-script.txt                # IPC calls replayed by scripts/smoke-shell.sh
+│   ├── lib/<module>.test.mjs               # node:test unit tests, one per lib module (append-only once sealed)
+│   ├── lib/contracts.test.mjs              # shipped with the LLD: each lib module exports exactly its contract
+│   ├── lib/dependencies.test.mjs           # owner-built: packaging/dependencies.json covers lib command tables and fonts
+│   ├── smoke/ipc-script.txt                # IPC calls replayed by scripts/smoke-shell.sh (append-only)
+│   ├── gallery/shell.qml                   # dev gallery of primitives (04-testing.md §3.1)
+│   └── test-lock.json                      # written by scripts/test-lock.py --update at every seal
+├── docs/lld/contracts.json                 # GENERATED from 02-contracts.md by scripts/gen-contracts.py
+├── packaging/dependencies.json             # every command, package and font the shell needs (G22; 07-distribution §3-§4)
+├── docs/state/                             # the project history as plain files (scripts/matstate.py): manifest, log, objects
+├── docs/handoffs/  docs/evidence/          # gate receipts (task-NN.md), checkpoint approvals, review notes; screenshots
 └── scripts/
-    ├── run-shell.sh  smoke-shell.sh        # Task 1
-    ├── gen-shell-data.py                   # Task 2
-    ├── lint-shell.py  lint-fixtures/       # shipped with this LLD
-    └── verify-design-system.sh             # existing; runs lint + unit tests
+    ├── run-shell.sh  smoke-shell.sh        # ship with the LLD; validated in Task 11
+    ├── gen-shell-data.py                   # Task 1
+    ├── lint-shell.py  lint-fixtures/       # shipped with this LLD (G01–G23)
+    ├── check-deps.py  fetch-fonts.py       # this machine against packaging/dependencies.json; install the shipped fonts
+    ├── bootstrap-linux.sh                  # instruction.md Part 1: install missing packages, fonts, session check
+    ├── gen-contracts.py  check-refs.py  test-lock.py  check-scope.py  check-plan-tests.py  planlib.py   # shipped with this LLD
+    ├── next-task.py  task-gate.py  matstate.py  qs-api.py  checkpoint.sh                      # unattended runs (06)
+    └── verify-design-system.sh             # existing; runs every check except check-scope + unit tests
 ```
 
 Rules:
@@ -230,11 +245,24 @@ Widget `type` values are camelCase (`controlCenter`); lane names are snake_case 
 
 ## 6. Files on Disk
 
+`configDir`, `cacheDir` and `homeDir` are `ConfigService` members (`02-contracts.md` §1 "Paths"; `paths.mjs` in `02-contracts.md` §2.13); by default they are `~/.config/mat-shell`, `~/.cache/mat-shell` and `~`. The shell writes nothing outside them.
+
 | Path | Owner | Format |
 |---|---|---|
+| `configDir/config.json` | `ConfigService` (only writer) | JSON, schema in `02-contracts.md` §3.1 |
+| `configDir/theme.json` | matugen (writer), `ColorTokens` (reader; resolves the folder with the same rule) | `{ "dark": {role: "#hex"}, "light": {…} }` |
+| `configDir/matugen/` | seeded by `ThemeService` from `Quickshell.shellDir + "/assets/matugen/"` when missing, never overwritten (Task 11 (runtime spike) copies it by hand before `ThemeService` exists) | matugen config + template |
+| `configDir/binds.conf` | `KeybindService` | Hyprland `bind = …, global, mat-shell:<actionId>` lines |
+| `cacheDir/theme.prev.json` | `ThemeService` | copy of the previous `theme.json` (Undo) |
+| `cacheDir/weather.json` | `WeatherService` | wttr.in `j1` JSON + `fetchedAt` |
+| `cacheDir/art/` | `MediaService` | downloaded album art |
+| `homeDir/Pictures/Screenshots/`, `homeDir/Videos/Recordings/` | `CaptureService` | `%Y-%m-%d_%H-%M-%S.png` / `.mp4` |
+| `Quickshell.shellDir/assets/` | read only; generated by `scripts/gen-shell-data.py` | files the installed shell needs at runtime |
+
+---|---|---|
 | `~/.config/mat-shell/config.json` | `ConfigService` (only writer) | JSON, schema in `02-contracts.md` §3.1 |
 | `~/.config/mat-shell/theme.json` | matugen (writer), `ColorTokens` (reader) | `{ "dark": {role: "#hex"}, "light": {…} }` |
-| `~/.config/mat-shell/matugen/` | installed by Task 2 from `design-system/tokens/matugen/` | matugen config + template |
+| `~/.config/mat-shell/matugen/` | installed by Task 11 (runtime spike) from `design-system/tokens/matugen/` | matugen config + template |
 | `~/.config/mat-shell/binds.conf` | `KeybindService` | Hyprland `bind = …, global, mat-shell:<actionId>` lines |
 | `~/.cache/mat-shell/theme.prev.json` | `ThemeService` | copy of the previous `theme.json` (Undo) |
 | `~/.cache/mat-shell/weather.json` | `WeatherService` | wttr.in `j1` JSON + `fetchedAt` |

@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""check-deps.py — check this machine against packaging/dependencies.json (the seed of `mat-shell doctor`).
+
+Usage:
+  python3 scripts/check-deps.py              # every command on PATH? every shipped font known to fontconfig?
+  python3 scripts/check-deps.py --strict     # same, exit 1 when a required command or a font is missing
+  python3 scripts/check-deps.py --pacman     # also ask pacman which repository has each Arch package
+  python3 scripts/check-deps.py --validate   # only check the manifest's shape (verify-design-system.sh runs this)
+
+Missing optional commands are reported, not failed: the feature that uses them shows an unavailable state.
+"""
+import json
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parent.parent
+MANIFEST = ROOT / "packaging" / "dependencies.json"
+NEEDS = {"required", "optional"}
+
+
+def load():
+    return json.loads(MANIFEST.read_text(encoding="utf-8"))
+
+
+def validate(deps):
+    """Shape errors in the manifest, as strings."""
+    errors = []
+    for key in ("commands", "packages", "session", "fonts"):
+        if key not in deps:
+            errors.append(f"missing top-level `{key}`")
+    for name, e in deps.get("commands", {}).items():
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._+-]*", name):
+            errors.append(f"commands.{name}: not a plain program name")
+        if not isinstance(e.get("arch"), str) or not e["arch"]:
+            errors.append(f"commands.{name}: needs an `arch` package")
+        if e.get("need") not in NEEDS:
+            errors.append(f"commands.{name}: `need` must be required or optional")
+        if not e.get("usedBy"):
+            errors.append(f"commands.{name}: `usedBy` names no service")
+    for i, e in enumerate(deps.get("packages", [])):
+        if not e.get("arch") or e.get("need") not in NEEDS or not e.get("for"):
+            errors.append(f"packages[{i}]: needs `arch`, `need` (required/optional) and `for`")
+    for i, e in enumerate(deps.get("session", [])):
+        if not e.get("arch") or not e.get("for"):
+            errors.append(f"session[{i}]: needs `arch` and `for`")
+    for i, f in enumerate(deps.get("fonts", [])):
+        if not re.fullmatch(r"[0-9a-f]{64}", f.get("sha256", "")):
+            errors.append(f"fonts[{i}]: `sha256` must be 64 lower-case hex digits")
+        for k in ("url", "licenseUrl"):
+            if not str(f.get(k, "")).startswith("https://"):
+                errors.append(f"fonts[{i}]: `{k}` must be an https URL")
+            if re.search(r"/(?:main|master|HEAD)/", str(f.get(k, ""))):
+                errors.append(f"fonts[{i}]: `{k}` must pin a commit, not a branch")
+        for k in ("family", "file", "license", "for"):
+            if not f.get(k):
+                errors.append(f"fonts[{i}]: needs `{k}`")
+    return errors
+
+
+def font_families():
+    """Families fontconfig knows, or None when fc-list is missing."""
+    if not shutil.which("fc-list"):
+        return None
+    out = subprocess.run(["fc-list", ":", "family"], capture_output=True, text=True).stdout
+    return {name.strip() for line in out.splitlines() for name in line.split(",")}
+
+
+def pacman_repo(pkg):
+    r = subprocess.run(["pacman", "-Si", pkg], capture_output=True, text=True)
+    m = re.search(r"^Repository\s*:\s*(\S+)", r.stdout, re.M)
+    return m.group(1) if r.returncode == 0 and m else None
+
+
+def main(argv):
+    deps = load()
+    errors = validate(deps)
+    if errors:
+        for e in errors:
+            print(f"ERROR: packaging/dependencies.json: {e}")
+        sys.exit(1)
+    if "--validate" in argv:
+        print(f"  ✓ packaging/dependencies.json: {len(deps['commands'])} commands, {len(deps['packages'])} packages, {len(deps['fonts'])} font files")
+        return
+    missing_required = []
+    print("Commands:")
+    for name, e in sorted(deps["commands"].items()):
+        ok = shutil.which(name) is not None
+        if not ok and e["need"] == "required":
+            missing_required.append(name)
+        print(f"  {'ok     ' if ok else 'MISSING'} {name:<14} {e['need']:<9} arch:{e['arch']:<16} {', '.join(e['usedBy'])}")
+    print("Fonts:")
+    families = font_families()
+    for family in sorted({f["family"] for f in deps["fonts"]} | {"JetBrains Mono"}):
+        ok = families is not None and family in families
+        if not ok:
+            missing_required.append(family)
+        print(f"  {'ok     ' if ok else 'MISSING'} {family}" + ("" if families is not None else "  (fc-list not found)"))
+    if "--pacman" in argv:
+        if not shutil.which("pacman"):
+            print("ERROR: --pacman needs pacman (Arch Linux)")
+            sys.exit(1)
+        pkgs = sorted({e["arch"] for e in deps["commands"].values()} | {e["arch"] for e in deps["packages"]} | {e["arch"] for e in deps["session"]})
+        print("Arch packages (pacman -Si):")
+        for pkg in pkgs:
+            repo = pacman_repo(pkg)
+            print(f"  {repo or 'NOT IN REPOS (AUR?)':<20} {pkg}")
+    if missing_required:
+        print(f"missing required: {', '.join(missing_required)}" + ("" if "--strict" in argv else " (report only; --strict fails)"))
+        if "--strict" in argv:
+            sys.exit(1)
+
+
+if __name__ == "__main__":
+    main(sys.argv)

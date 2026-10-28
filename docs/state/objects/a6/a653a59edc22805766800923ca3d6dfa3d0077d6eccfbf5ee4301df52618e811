@@ -1,0 +1,64 @@
+// Notification rules: toasting, timeouts, safe body markup, history grouping (docs/lld/02-contracts.md §2.12; spec 04-notifications.md).
+
+export function shouldToast(urgency, dnd) {
+  return !dnd || urgency === "critical";
+}
+
+export function toastTimeoutMs(urgency, expireTimeoutMs) {
+  if (urgency === "critical") return 0;
+  if (expireTimeoutMs > 0) return expireTimeoutMs;
+  return urgency === "low" ? 4000 : 6000;
+}
+
+function escapeText(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function escapeAttr(s) {
+  return escapeText(s).replace(/"/g, "&quot;");
+}
+
+// Notification bodies are untrusted (Review Focus 4): keep <b> <i> <u> <br> and http(s) links, drop every other tag.
+export function sanitizeBody(markup) {
+  const tag = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b([^<>]*)>/g;
+  let out = "";
+  let last = 0;
+  let openLinks = 0;
+  let m;
+  while ((m = tag.exec(markup)) !== null) {
+    out += escapeText(markup.slice(last, m.index));
+    last = tag.lastIndex;
+    const closing = m[1] === "/";
+    const name = m[2].toLowerCase();
+    if (name === "b" || name === "i" || name === "u") {
+      out += "<" + (closing ? "/" : "") + name + ">";
+    } else if (name === "br" && !closing) {
+      out += "<br>";
+    } else if (name === "a" && closing && openLinks > 0) {
+      openLinks -= 1;
+      out += "</a>";
+    } else if (name === "a" && !closing) {
+      const href = m[3].match(/\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+      const url = href ? (href[1] !== undefined ? href[1] : href[2]) : "";
+      if (/^https?:\/\//i.test(url)) {
+        openLinks += 1;
+        out += '<a href="' + escapeAttr(url) + '">';
+      }
+    }
+  }
+  return out + escapeText(markup.slice(last));
+}
+
+export function groupHistory(items) {
+  const newest = items.slice().sort((a, b) => b.time - a.time);
+  const groups = [];
+  for (const item of newest) {
+    let group = groups.find((g) => g.appName === item.appName);
+    if (!group) {
+      group = { appName: item.appName, items: [] };
+      groups.push(group);
+    }
+    group.items.push(item);
+  }
+  return groups;
+}

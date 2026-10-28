@@ -1,0 +1,95 @@
+{
+  "$doc": "Every external program, package and font Mat Shell needs (docs/lld/07-distribution.md §3-§4). One key per distribution inside each entry (arch first; fedora/debian later). `commands` is closed: lint rule G22 rejects a Process or execDetached whose program is not a key here. `need`: required = the shell is broken without it; optional = one feature shows an unavailable state. `session` is what the installer adds on a bare system. `fonts` ship inside the mat-shell package. Read by scripts/check-deps.py, scripts/fetch-fonts.py, and later the PKGBUILD and install.sh.",
+  "verified": {
+    "arch": "not yet: Task 11 (runtime spike) records `python3 scripts/check-deps.py --pacman`"
+  },
+  "commands": {
+    "brightnessctl": { "arch": "brightnessctl", "need": "optional", "usedBy": ["BrightnessService"] },
+    "busctl": { "arch": "systemd", "need": "required", "usedBy": ["SessionService"] },
+    "cliphist": { "arch": "cliphist", "need": "optional", "usedBy": ["LauncherService"] },
+    "curl": { "arch": "curl", "need": "optional", "usedBy": ["WeatherService", "MediaService"] },
+    "grim": { "arch": "grim", "need": "optional", "usedBy": ["CaptureService"] },
+    "hyprctl": { "arch": "hyprland", "need": "optional", "usedBy": ["CompositorService", "KeybindService"] },
+    "loginctl": { "arch": "systemd", "need": "required", "usedBy": ["SessionService"] },
+    "magick": { "arch": "imagemagick", "need": "optional", "usedBy": ["ThemeService"] },
+    "matugen": { "arch": "matugen", "need": "required", "usedBy": ["ThemeService", "MediaService"] },
+    "mkdir": { "arch": "coreutils", "need": "required", "usedBy": ["ThemeService", "CaptureService", "WeatherService", "MediaService"] },
+    "niri": { "arch": "niri", "need": "optional", "usedBy": ["CompositorService", "SessionService"] },
+    "nmcli": { "arch": "networkmanager", "need": "optional", "usedBy": ["NetworkService"] },
+    "qalc": { "arch": "libqalculate", "need": "optional", "usedBy": ["LauncherService"] },
+    "sh": { "arch": "bash", "need": "required", "usedBy": ["R06 pipelines only: the commands inside the script must be keys here too"] },
+    "slurp": { "arch": "slurp", "need": "optional", "usedBy": ["CaptureService"] },
+    "swww": { "arch": "swww", "need": "optional", "usedBy": ["ThemeService"] },
+    "swww-daemon": { "arch": "swww", "need": "optional", "usedBy": ["ThemeService"] },
+    "systemctl": { "arch": "systemd", "need": "required", "usedBy": ["SessionService"] },
+    "wf-recorder": { "arch": "wf-recorder", "need": "optional", "usedBy": ["CaptureService"] },
+    "wl-copy": { "arch": "wl-clipboard", "need": "optional", "usedBy": ["LauncherService"] }
+  },
+  "packages": [
+    { "arch": "quickshell", "need": "required", "for": "the shell itself (Quickshell >= 0.3.0)" },
+    { "arch": "qt6-declarative", "need": "required", "for": "QtQuick, QtQuick.Effects, QtQuick.Shapes" },
+    { "arch": "qt6-wayland", "need": "required", "for": "Wayland layer-shell surfaces" },
+    { "arch": "qt6-svg", "need": "required", "for": "SVG app and tray icons" },
+    { "arch": "qt6-imageformats", "need": "optional", "for": "WebP and other wallpaper / album-art formats" },
+    { "arch": "pipewire", "need": "required", "for": "AudioService (Quickshell.Services.Pipewire)" },
+    { "arch": "wireplumber", "need": "required", "for": "PipeWire session manager" },
+    { "arch": "upower", "need": "optional", "for": "BatteryService" },
+    { "arch": "power-profiles-daemon", "need": "optional", "for": "BatteryService power profiles" },
+    { "arch": "polkit", "need": "required", "for": "PolkitService (the shell is the agent)" },
+    { "arch": "bluez", "need": "optional", "for": "BluetoothService (Quickshell.Bluetooth)" },
+    { "arch": "fontconfig", "need": "required", "for": "finding the shipped fonts" },
+    { "arch": "ttf-jetbrains-mono", "need": "required", "for": "familyMono" }
+  ],
+  "session": [
+    { "arch": "hyprland", "for": "the compositor" },
+    { "arch": "xdg-desktop-portal-hyprland", "for": "screen sharing and portals" },
+    { "arch": "xdg-desktop-portal-gtk", "for": "file chooser portal" },
+    { "arch": "greetd", "for": "login manager" },
+    { "arch": "greetd-tuigreet", "for": "login screen" },
+    { "arch": "pipewire-pulse", "for": "PulseAudio clients" },
+    { "arch": "bluez-utils", "for": "Bluetooth service tools" },
+    { "arch": "networkmanager", "for": "network service" },
+    { "arch": "xdg-user-dirs", "for": "Pictures / Videos folders" },
+    { "arch": "noto-fonts", "for": "fallback text glyphs" },
+    { "arch": "noto-fonts-emoji", "for": "emoji" },
+    { "arch": "foot", "for": "a terminal" }
+  ],
+  "fonts": [
+    {
+      "family": "Google Sans Flex",
+      "file": "GoogleSansFlex[ROND,opsz,slnt,wdth,wght].ttf",
+      "url": "https://raw.githubusercontent.com/google/fonts/bd8f81ddb5c74d5c8897b36ad88b440266245103/ofl/googlesansflex/GoogleSansFlex%5BROND%2Copsz%2Cslnt%2Cwdth%2Cwght%5D.ttf",
+      "sha256": "a9ac770798857d5e8ac593ced42b22e40a7c08cec98319f92b0eccc2783a77ba",
+      "license": "OFL-1.1",
+      "licenseUrl": "https://raw.githubusercontent.com/google/fonts/bd8f81ddb5c74d5c8897b36ad88b440266245103/ofl/googlesansflex/OFL.txt",
+      "for": "familySans, familyDisplay"
+    },
+    {
+      "family": "Instrument Serif",
+      "file": "InstrumentSerif-Regular.ttf",
+      "url": "https://raw.githubusercontent.com/google/fonts/0b58fb370093f9a9f4ff785d94405710b79de67c/ofl/instrumentserif/InstrumentSerif-Regular.ttf",
+      "sha256": "498efd461f6ddfcb7a111bf9a565709d2085d48201d501ead960d93e84ffbb88",
+      "license": "OFL-1.1",
+      "licenseUrl": "https://raw.githubusercontent.com/google/fonts/0b58fb370093f9a9f4ff785d94405710b79de67c/ofl/instrumentserif/OFL.txt",
+      "for": "familyEditorial"
+    },
+    {
+      "family": "Instrument Serif",
+      "file": "InstrumentSerif-Italic.ttf",
+      "url": "https://raw.githubusercontent.com/google/fonts/0b58fb370093f9a9f4ff785d94405710b79de67c/ofl/instrumentserif/InstrumentSerif-Italic.ttf",
+      "sha256": "08939b8bdf534afec24ae0ef5e03f948940cd9a8fe08e7fecbad040e62327385",
+      "license": "OFL-1.1",
+      "licenseUrl": "https://raw.githubusercontent.com/google/fonts/0b58fb370093f9a9f4ff785d94405710b79de67c/ofl/instrumentserif/OFL.txt",
+      "for": "familyEditorial"
+    },
+    {
+      "family": "Material Symbols Rounded",
+      "file": "MaterialSymbolsRounded[FILL,GRAD,opsz,wght].ttf",
+      "url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/variablefont/MaterialSymbolsRounded%5BFILL%2CGRAD%2Copsz%2Cwght%5D.ttf",
+      "sha256": "32e4011709e055596eb8d2dd0f7cb547b47c1d40ac9ecb8fad54f7f7eac202e7",
+      "license": "Apache-2.0",
+      "licenseUrl": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/LICENSE",
+      "for": "familyIcons"
+    }
+  ]
+}

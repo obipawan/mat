@@ -1,0 +1,31 @@
+# Mat Shell — End Objective
+
+**A complete Material 3 Expressive desktop shell for Wayland, built on Quickshell, that installs with one command on Arch Linux, starting from a minimal Arch install with no desktop, and that other distributions can package.** The reference for the install experience is dux-shell (`github.com/duxlabs-dev/dux-shell`, "DankLinux"): one command installs the shell and everything it needs, through a native package per distribution.
+
+---
+
+## Definition of Done
+
+| # | Outcome | How it is shown |
+|---|---|---|
+| 1 | **The shell works.** All 34 plan tasks are sealed and reviewed; the design system's surfaces behave as specified. | `bash scripts/verify-design-system.sh` and `bash scripts/smoke-shell.sh` pass on the target; the manual matrix (`docs/lld/04-testing.md` §4) is recorded; every checkpoint has an approval in `docs/handoffs/` |
+| 2 | **It is a package.** `mat-shell` installs only under `/usr`, declares every runtime dependency, and needs nothing from this repository at runtime. | Arch: `makepkg` + `namcap` clean in a clean chroot; the shell starts from the installed files with the repository absent |
+| 3 | **One command, from bare Arch.** On a fresh minimal Arch install (`pacstrap base linux linux-firmware`, a user with sudo, network), one command run as that user installs the compositor, login screen, audio, network, Bluetooth, portals, fonts and the shell. A reboot lands on a login screen, and logging in opens Hyprland with Mat Shell. | An automated VM test: archiso → minimal install → installer → reboot → login → IPC smoke → screenshot |
+| 4 | **The installer is safe.** Never runs as root; shows its plan before changing anything; `--dry-run`; backs up every file it replaces; idempotent (a second run changes nothing); logs to a file; `--uninstall` restores the backups. | Installer tests in the VM: run twice, uninstall, diff the system |
+| 5 | **Other distributions can follow.** The dependency list and installer are split by distribution, so adding Fedora or Debian is data plus one module, not a rewrite. | A second distribution added without touching the Arch module |
+
+Not in scope for the first release: our own greeter (greetd with tuigreet first), a NixOS module, installer support for compositors other than Hyprland (Niri and Sway are supported by the shell itself, through `CompositorService`).
+
+---
+
+## Phases
+
+| Phase | What | Where | Status |
+|---|---|---|---|
+| A | Tooling and pure logic (Tasks 1–10) | design machine | done, checkpoint 10 approved |
+| B–I | Runtime, services, primitives, bars, surfaces, settings, overlays (Tasks 11–34) | Linux target, unattended agent (`docs/lld/06-unattended-runbook.md`) | next |
+| J | **Install readiness**: rules that keep the code packageable while it is written (`docs/lld/07-distribution.md` §3), and fonts that can ship | design machine, before B–I | done (owner seal 14): XDG paths, runtime assets, G22–G23, dependency manifest, shipped fonts, Task 11 probes |
+| K | Packaging: install layout, launcher, compositor snippet, PKGBUILD, dependency manifest verified | design machine + Linux target, after the code returns | planned |
+| L | Installer and its VM test harness | design machine + Linux target | planned |
+
+The code generated on the Linux target comes back to this repository for review before Phases K and L start.

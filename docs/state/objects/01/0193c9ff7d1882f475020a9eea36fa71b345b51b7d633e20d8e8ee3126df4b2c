@@ -1,0 +1,1014 @@
+# Mat Shell Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Build the Mat Shell Quickshell desktop shell under `shell/` exactly as specified by `design-system/` and `docs/lld/`, in 34 independently reviewable tasks.
+
+**Architecture:**
+- Pure ES modules in `shell/lib/` hold every decision and are unit-tested with `node --test`.
+- Singleton services in `shell/MatShell/Services/` own all side effects.
+- `ShellState` owns the lanes.
+- M3 primitives compose into bars and surfaces, and `shell.qml` composes them all.
+
+Read `docs/lld/README.md` first.
+
+**Tech Stack:**
+- Quickshell ≥ 0.3.0 (tested on 0.3.2), Qt ≥ 6.8 QML/QtQuick, on Linux Wayland (Hyprland first).
+- Node ≥ 22 (`node:test`) and Python ≥ 3.11 for tooling.
+- matugen ≥ 4.0.
+
+**Spec:**
+- `docs/lld/` (README, 01-architecture, 02-contracts, 03-guardrails, 04-testing)
+- `design-system/` (INDEX.md, then the files each task cites)
+
+## Global Constraints
+
+- Every visual constant comes from `Tokens.*` (G01–G05). A spec value with no token may appear in one file only, with `// lint-allow G03: <spec §>`.
+- Layer config for every window is the row in `docs/lld/01-architecture.md` §4, copied verbatim.
+- Lane strings are exactly: `"control_center"`, `"notifications"`, `"calendar"`, `"media"` / `"launcher"`, `"overview"`, `"power"`, `"polkit"`, `"capture"`, `"theme_studio"`, `"widget_peek"`.
+- All names, signatures, and file paths come from `docs/lld/02-contracts.md` and `docs/lld/01-architecture.md` §1.
+- The config file is `~/.config/mat-shell/config.json` (`schemaVersion: 1`), written only by `ConfigService`.
+- The shell runs via `./scripts/run-shell.sh` (`qs -c mat-shell`); IPC is `qs -c mat-shell ipc call <target> <fn> [args]`.
+- Spatial motion uses `SpringAnimation` with `Tokens.motion.spring{Fast,Default,Slow}Spatial`, gated by `Tokens.motion.spatialMotionEnabled`. Effects use `Tokens.motion.spring*Effects.durationMs`.
+- Live numbers use `font.features: Tokens.typography.tabularFeatures`.
+- No new dependencies (R04). No network access except `WeatherService` (R21).
+- Before every seal: `bash scripts/verify-design-system.sh` prints `=== ALL CHECKS PASSED SUCCESSFULLY ===`.
+- Every **Commit** step means `python3 scripts/task-gate.py N` (after a `--red` run once the tests exist): it runs every check, writes `docs/handoffs/task-NN.md`, and **seals** the task in `docs/state/` with the card's `feat(<scope>): <summary>` message. One task per seal. No git is used or needed (`docs/lld/06-unattended-runbook.md`).
+- A service or `ShellState` declares exactly its `02-contracts.md` members; helpers are private and start with `_` (G21).
+
+## Review Focus
+
+1. **Hand-edited or corrupt `config.json`** (invalid JSON, wrong types, unknown widgets, out-of-range numbers): the shell keeps running on the last good config and Settings shows the error banner. Tests: Task 4 (`normalizeConfig` garbage cases) and Task 12 (smoke step that writes invalid JSON while running).
+2. **Monitors that come and go, or a bar's `screens` naming an absent monitor**: no crash, no orphan windows, and insets stay correct. Tests: Task 4 (`barAppliesToScreen`), Task 5 (`insets` with no bars), Task 14 (manual hot-plug row).
+3. **Missing hardware or daemons** (no battery, backlight, Bluetooth adapter, NetworkManager, or MPRIS player): widgets show an unavailable state and the log stays free of errors. Tests: Tasks 20–21 (`debug` IPC expectations with `available:false`, smoke on a desktop without battery).
+4. **Untrusted strings** (SSIDs, wallpaper paths with spaces or quotes, notification HTML, clipboard text) must never reach a shell string or render as markup. Tests: Task 10 (`sanitizeBody`), Tasks 20 and 22 (review of every `Process.command` against R06), Task 29 (smoke notification with `<script>` body).
+5. **Rapid or conflicting triggers** (double toggles inside an animation, lock while a popover is open, a polkit request while the launcher is open, IPC spam) must leave the lanes consistent. Tests: Task 7 (reducer sequences) and Task 15 (smoke burst lines).
+
+---
+
+## Phase A — Tooling and Pure Logic (any machine)
+
+### Task 1: Generated data and token copy
+
+**Files:**
+- Create: `scripts/gen-shell-data.py`, `tests/lib/generated.test.mjs`
+- Generated (committed): `shell/MatShell/Tokens/{qmldir,Tokens.qml,ColorTokens.qml,MotionTokens.qml,ShapeTokens.qml,TypographyTokens.qml,MetricTokens.qml}`, `shell/lib/generated/widgetOptionsSchema.mjs`, `shell/lib/generated/barPresets.mjs`
+- Modify: `scripts/verify-design-system.sh` (run `python3 scripts/gen-shell-data.py --check` when `shell/` exists)
+
+**Depends on:** none
+
+**Interfaces:**
+- Produces: `WIDGET_OPTIONS`, `WIDGET_OPTION_MIGRATIONS` (`widgetOptionsSchema.mjs`); `BAR_PRESETS`, `BAR_GUARDRAILS`, `WIDGET_TYPES` (`barPresets.mjs`) — `02-contracts.md` §2.2.
+- CLI: `gen-shell-data.py` writes all outputs; `gen-shell-data.py --check` writes nothing, prints `  ✓ generated shell data is up to date` or `ERROR: stale <path>` and exits 1.
+
+- [x] **Step 1: Write the failing test** `tests/lib/generated.test.mjs`
+
+```js
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { WIDGET_OPTIONS, WIDGET_OPTION_MIGRATIONS } from "../../shell/lib/generated/widgetOptionsSchema.mjs";
+import { BAR_PRESETS, BAR_GUARDRAILS, WIDGET_TYPES } from "../../shell/lib/generated/barPresets.mjs";
+
+test("generated schema mirrors m3-tokens.json", () => {
+  assert.equal(Object.keys(WIDGET_OPTIONS).length, 13);
+  assert.ok(!("$spec" in WIDGET_OPTIONS));
+  assert.equal(WIDGET_OPTION_MIGRATIONS.clock.length, 3);
+  assert.equal(WIDGET_TYPES.length, 20);
+  assert.equal(BAR_PRESETS.top_and_dock.default, true);
+  assert.equal(BAR_GUARDRAILS.maxBarsPerEdge, 2);
+  assert.deepEqual(BAR_GUARDRAILS.thicknessPx.vertical, [44, 120]);
+});
+```
+
+- [x] **Step 2: Run it** — `node --test tests/lib/generated.test.mjs` → FAIL (`Cannot find module`).
+- [x] **Step 3: Implement `scripts/gen-shell-data.py`**
+  - Copy `design-system/tokens/qml/*` byte-for-byte into `shell/MatShell/Tokens/`.
+  - Write each `.mjs` as the header line `// GENERATED by scripts/gen-shell-data.py from design-system/tokens/m3-tokens.json. Do not edit.`, followed by `export const NAME = <json.dumps(value, indent=2, ensure_ascii=False)>;` per export.
+  - `--check` compares the would-be bytes with the files on disk.
+- [x] **Step 4: Run** `python3 scripts/gen-shell-data.py && node --test tests/lib/generated.test.mjs` → PASS. Then `python3 scripts/gen-shell-data.py --check` → `up to date`. Append a space to `barPresets.mjs`, rerun `--check` → exit 1, then regenerate.
+- [x] **Step 5: Run** `./scripts/verify-design-system.sh` → ALL CHECKS PASSED (the linter now sees `shell/` and must report it clean).
+- [x] **Step 6: Commit** `feat(tooling): generate shell token copy and schema modules`
+
+### Task 2: `util.mjs` and `widgetCatalog.mjs`
+
+**Files:**
+- Create: `shell/lib/util.mjs`, `tests/lib/util.test.mjs`, `shell/lib/widgetCatalog.mjs`, `tests/lib/widgetCatalog.test.mjs`
+
+**Depends on:** 1
+**Interfaces:** Produces `02-contracts.md` §2.1 and §2.3 exactly (the §2.3 table is the data).
+
+- [x] **Step 1: Write the failing tests**
+
+```js
+// util.test.mjs
+assert.equal(clamp(5, 0, 3), 3); assert.equal(clamp(NaN, 1, 2), 1);
+assert.equal(deepEqual({ a: [1, 2] }, { a: [1, 2] }), true); assert.equal(deepEqual([1, 2], [2, 1]), false);
+assert.equal(pascalCase("controlCenter"), "ControlCenter");
+const o = { a: { b: 1 } }; const c = clone(o); c.a.b = 2; assert.equal(o.a.b, 1);
+// widgetCatalog.test.mjs
+assert.deepEqual(CATALOG.map(e => e.type), WIDGET_TYPES);
+assert.equal(catalogEntry("telemetry").overflowPriority, 5);
+assert.equal(catalogEntry("privacy").security, true);
+assert.equal(catalogEntry("nope"), null);
+assert.equal(sourceFile("keyboardLayout"), "widgets/KeyboardLayoutWidget.qml");
+assert.deepEqual(CATALOG.filter(e => e.customisable).map(e => e.type).sort(), Object.keys(WIDGET_OPTIONS).sort());
+assert.equal(catalogEntry("clock").label, "Clock & calendar");
+```
+
+- [x] **Step 2: Run** `node --test "tests/lib/*.test.mjs"` → FAIL (module not found).
+- [x] **Step 3: Implement** both modules. `CATALOG` `description` = the "Function" column of `02-bar-widgets.md` §1.1 without backticks.
+- [x] **Step 4: Run** `node --test "tests/lib/*.test.mjs"` → PASS; `./scripts/verify-design-system.sh` → PASS.
+- [x] **Step 5: Commit** `feat(lib): add util helpers and the bar widget catalog`
+
+### Task 3: `widgetOptions.mjs`
+
+**Files:**
+- Create: `shell/lib/widgetOptions.mjs`, `tests/lib/widgetOptions.test.mjs`
+
+**Depends on:** 2
+**Interfaces:**
+- Consumes: `WIDGET_OPTIONS`, `WIDGET_OPTION_MIGRATIONS`, `deepEqual`, `clamp`.
+- Produces: `02-contracts.md` §2.4. The reference behaviour is `showcase/index.html` `resolveOptions` / `diffFromDefaults` / `migrateOptions`, plus de-duplication in `multiChoice`.
+
+- [x] **Step 1: Write the failing tests** (field lookups use `optionsSchema(type).find(f => f.key === k)`)
+
+```js
+assert.deepEqual(resolve("clock", {}, "horizontal"),
+  { preset: "dateTime", hourCycle: "system", showSeconds: false, customFormat: "ddd d MMM  HH:mm" });
+assert.equal(resolve("clock", { preset: "custom" }, "vertical").preset, "dateTime");        // orientation-bound → default
+assert.equal(resolve("workspaces", { count: 99 }, "horizontal").count, 10);
+assert.equal(resolve("workspaces", { count: "x" }, "horizontal").count, 5);
+assert.deepEqual(resolve("telemetry", { metrics: ["cpu", "cpu", "bogus", "gpu", "disk", "ram", "swap"] }, "horizontal").metrics,
+  ["cpu", "gpu", "disk", "ram"]);
+assert.deepEqual(resolve("telemetry", { metrics: [] }, "horizontal").metrics, ["cpu", "ram"]);
+assert.ok(!("future" in resolve("clock", { future: 1 }, "horizontal")));
+assert.deepEqual(diffFromDefaults("clock", { preset: "dateTime", showSeconds: true, future: 1 }), { showSeconds: true, future: 1 });
+assert.deepEqual(migrate("clock", { showDate: false }).options, { preset: "time" });
+assert.deepEqual(migrate("clock", { format: "HH:mm" }).options, { preset: "custom", customFormat: "HH:mm" });
+assert.deepEqual(migrate("clock", { showDate: true }).options, {});
+const disk = optionsSchema("telemetry").find(f => f.key === "diskMount");
+assert.equal(isFieldVisible(disk, { metrics: ["cpu"] }), false);
+assert.equal(isFieldVisible(disk, { metrics: ["disk"] }), true);
+const items = optionsSchema("controlCenter")[0], metrics = optionsSchema("telemetry")[0];
+assert.equal(toggleListItem(items, ["network"], "network"), null);
+assert.equal(toggleListItem(metrics, ["cpu", "ram", "gpu", "disk"], "swap"), null);
+assert.deepEqual(toggleListItem(metrics, ["cpu"], "gpu"), ["cpu", "gpu"]);
+assert.deepEqual(moveListItem(["a", "b", "c"], 2, 0), ["c", "a", "b"]);
+assert.deepEqual(moveListItem(["a"], 0, 5), ["a"]);
+assert.equal(limitNote(metrics, ["cpu", "ram", "gpu", "disk"]), "Up to 4 items · drag to reorder");
+assert.equal(limitNote(items, ["network"]), "At least 1 item · drag to reorder");
+assert.equal(hasOptions("power"), false);
+assert.deepEqual(optionsSchema("nope"), []);
+for (const [type, fields] of Object.entries(WIDGET_OPTIONS))
+  for (const f of fields) if (fieldApplies(f, "horizontal"))
+    assert.deepEqual(resolve(type, {}, "horizontal")[f.key], f.default, `${type}.${f.key}`);
+```
+
+- [x] **Step 2: Run** `node --test tests/lib/widgetOptions.test.mjs` → FAIL.
+- [x] **Step 3: Implement** the exports in `02-contracts.md` §2.4.
+- [x] **Step 4: Run** `node --test "tests/lib/*.test.mjs"` → PASS; verify → PASS.
+- [x] **Step 5: Commit** `feat(lib): add the widget options resolver, diff and migrations`
+
+### Task 4: `barConfig.mjs`
+
+**Files:**
+- Create: `shell/lib/barConfig.mjs`, `tests/lib/barConfig.test.mjs`
+
+**Depends on:** 3
+**Interfaces:** Produces `02-contracts.md` §2.5. `defaultConfig()` returns the JSON in §3.1 with `bars = presetBars(<default preset>)`.
+
+- [x] **Step 1: Write the failing tests**
+
+```js
+const { bar } = normalizeBar({}, 0);
+assert.deepEqual(bar, { ...BAR_DEFAULTS, id: "bar1", name: "Bar 1" });
+const m = normalizeBar({ margin: 12 }, 0).bar;
+assert.equal(m.marginHorizontal, 12); assert.equal(m.marginVertical, 12); assert.ok(!("margin" in m));
+assert.equal(normalizeBar({ position: "left", thickness: 30 }, 0).bar.thickness, 44);
+assert.equal(normalizeBar({ thickness: 500 }, 0).bar.thickness, 96);
+const v = normalizeBar({ visibility: "sometimes" }, 0);
+assert.equal(v.bar.visibility, "always"); assert.equal(v.warnings.length, 1);
+assert.equal(normalizeBar({ length: 150 }, 0).bar.length, 100);
+assert.equal(normalizeBar({ length: 5 }, 0).bar.length, 10);
+assert.equal(normalizeBar({ length: "half" }, 0).bar.length, "full");
+assert.deepEqual(normalizeBar({ sections: { start: ["clock"] } }, 0).bar.sections.start, [{ type: "clock", options: {} }]);
+const u = normalizeBar({ sections: { end: [{ type: "weatherRadar" }] } }, 0);
+assert.equal(u.bar.sections.end[0].type, "weatherRadar"); assert.equal(u.warnings.length, 1);
+assert.deepEqual(normalizeBar({ sections: { end: [{ type: "clock", options: { showDate: false } }] } }, 0).bar.sections.end[0].options, { preset: "time" });
+for (const junk of ["garbage", null, 42, []]) assert.deepEqual(normalizeConfig(junk).config, defaultConfig());
+assert.deepEqual(normalizeConfig({ bars: [{}], extra: { a: 1 } }).config.extra, { a: 1 });
+assert.deepEqual(defaultConfig().bars.map(b => b.id), ["top", "dock"]);
+const h = { ...BAR_DEFAULTS, marginVertical: 4, marginHorizontal: 10 };
+assert.equal(edgeGap(h), 4); assert.equal(endGap(h), 10);
+assert.equal(edgeGap({ ...h, position: "left" }), 10);
+assert.deepEqual(thicknessRange("right"), [44, 120]);
+const top = i => ({ ...BAR_DEFAULTS, id: "t" + i, position: "top" });
+assert.deepEqual(placementProblems([top(1), top(2), top(3)], "DP-1", { width: 1920, height: 1080 }), ["Only 2 bars fit on the top edge"]);
+assert.deepEqual(placementProblems([top(1), top(2), { ...top(3), screens: ["HDMI-A-1"] }], "DP-1", { width: 1920, height: 1080 }), []);
+const fat = (id, position) => ({ ...BAR_DEFAULTS, id, position, thickness: 96 });
+assert.deepEqual(placementProblems([fat("a", "top"), fat("b", "top"), fat("c", "bottom")], "DP-1", { width: 1920, height: 1080 }),
+  ["Bars may reserve at most 25% of the screen height"]);
+assert.equal(barAppliesToScreen({ ...BAR_DEFAULTS, screens: ["HDMI-A-1"] }, "DP-1"), false);
+assert.deepEqual(firstRunPinned([["a", "b"], ["c"]], id => id === "b"), ["b"]);
+```
+
+- [x] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4: Run** `node --test "tests/lib/*.test.mjs"` → PASS; verify → PASS.
+- [x] **Step 5: Commit** `feat(lib): add bar config normalization, presets and placement rules`
+
+### Task 5: `barGeometry.mjs`
+
+**Files:**
+- Create: `shell/lib/barGeometry.mjs`, `tests/lib/barGeometry.test.mjs`
+
+**Depends on:** 4
+**Interfaces:** Produces `02-contracts.md` §2.6.
+
+- [ ] **Step 1: Write the failing tests** (`B(o)` = `{ ...BAR_DEFAULTS, id: "a", ...o }`; `ctx(o)` = `{ desktopMode: "tiling", revealed: false, windowsOverlap: false, barFocusActive: false, settingsPreview: false, ...o }`)
+
+```js
+assert.equal(effectiveVisibility(B({ visibility: "auto" }), "tiling"), "dodge");
+assert.equal(effectiveVisibility(B({ visibility: "auto" }), "floating"), "always");
+assert.equal(isShown(B({ visibility: "dodge" }), ctx({ windowsOverlap: true })), false);
+assert.equal(isShown(B({ visibility: "dodge" }), ctx({ windowsOverlap: true, barFocusActive: true })), true);
+assert.equal(isShown(B({ visibility: "autohide" }), ctx({ revealed: true })), true);
+assert.equal(exclusiveZone(B({}), true, "tiling"), 48);
+assert.equal(exclusiveZone(B({ visibility: "autohide" }), true, "tiling"), 0);
+assert.equal(exclusiveZone(B({ reserveSpace: false }), true, "tiling"), 0);
+assert.equal(exclusiveZone(B({}), false, "tiling"), 0);
+const a = B({ id: "a" }), b = B({ id: "b", thickness: 32 });
+assert.deepEqual(stackOffsets([a, b], ["a", "b"]), { a: 0, b: 48 });
+assert.deepEqual(stackOffsets([a, b], ["b"]), { a: 0, b: 0 });
+assert.deepEqual(insets([a, b], ["a", "b"]), { top: 88, right: 0, bottom: 0, left: 0 });
+assert.deepEqual(insets([], []), { top: 0, right: 0, bottom: 0, left: 0 });
+assert.deepEqual(maxInsets([B({ visibility: "autohide" })]), { top: 48, right: 0, bottom: 0, left: 0 });
+assert.equal(lengthPx(B({}), 1920, 600), 1904);
+assert.equal(lengthPx(B({ length: "fit" }), 1920, 600), 600);
+assert.equal(lengthPx(B({ length: "fit" }), 1920, 5000), 1904);
+assert.equal(lengthPx(B({ length: 50 }), 1920, 0), 960);
+assert.equal(alignOffset(B({ length: "fit", alignment: "center" }), 1920, 600), 660);
+assert.equal(alignOffset(B({ length: "fit", alignment: "end" }), 1920, 600), 1312);
+assert.equal(alignOffset(B({ length: "fit", alignment: "start" }), 1920, 600), 8);
+const r = regions([a], ["a"], { width: 1920, height: 1080 }, { a: 1904 });
+assert.equal(r.length, 8);
+assert.deepEqual(r[0], { x: 8, y: 0, width: 1904, height: 48 });
+assert.deepEqual(r[1], { x: 0, y: 0, width: 0, height: 0 });
+const l = B({ id: "l", position: "left", thickness: 56 });
+assert.deepEqual(regions([l], ["l"], { width: 1920, height: 1080 }, { l: 1064 })[6], { x: 0, y: 8, width: 64, height: 1064 });
+```
+
+- [ ] **Step 2–4:** FAIL → implement → `node --test "tests/lib/*.test.mjs"` PASS; verify PASS.
+- [ ] **Step 5: Commit** `feat(lib): add bar geometry, insets, stacking and click-catcher regions`
+
+### Task 6: `overflow.mjs`
+
+**Files:**
+- Create: `shell/lib/overflow.mjs`, `tests/lib/overflow.test.mjs`
+
+**Depends on:** 2
+**Interfaces:** Produces `02-contracts.md` §2.7 (hidden items add no gap).
+
+- [ ] **Step 1: Write the failing tests**
+
+```js
+const items = [{ id: "title", priority: 1, widths: [260, 160, 40] }, { id: "tele", priority: 5, widths: [120, 0] }, { id: "clock", priority: null, widths: [100] }];
+assert.deepEqual(planOverflow(items, 1000, 4), { steps: { title: 0, tele: 0, clock: 0 }, hidden: [] });
+assert.deepEqual(planOverflow(items, 450, 4), { steps: { title: 0, tele: 1, clock: 0 }, hidden: ["tele"] });
+assert.deepEqual(planOverflow(items, 300, 4), { steps: { title: 1, tele: 1, clock: 0 }, hidden: ["tele"] });
+assert.deepEqual(planOverflow(items, 50, 4), { steps: { title: 2, tele: 1, clock: 0 }, hidden: ["tele"] });
+const tie = [{ id: "a", priority: 4, widths: [50, 0] }, { id: "b", priority: 4, widths: [50, 0] }];
+assert.deepEqual(planOverflow(tie, 60, 4).hidden, ["b"]);
+```
+
+- [ ] **Step 2–4:** FAIL → implement → PASS; verify PASS.
+- [ ] **Step 5: Commit** `feat(lib): add the bar overflow planner`
+
+### Task 7: `shellReducer.mjs`
+
+**Files:**
+- Create: `shell/lib/shellReducer.mjs`, `tests/lib/shellReducer.test.mjs`
+
+**Depends on:** 2
+**Interfaces:** Produces `02-contracts.md` §2.8.
+
+- [ ] **Step 1: Write the failing tests**
+
+```js
+const S = o => ({ ...INITIAL, ...o });
+assert.equal(togglePopover(INITIAL, "calendar", true).activePopover, "calendar");
+assert.equal(togglePopover(S({ activePopover: "calendar" }), "calendar", true).activePopover, "");
+assert.equal(togglePopover(S({ activePopover: "calendar" }), "calendar", false).activePopover, "calendar");
+assert.equal(togglePopover(S({ activeModal: "launcher" }), "media", true).activeModal, "");
+assert.deepEqual(togglePopover(INITIAL, "bogus", true), INITIAL);
+assert.deepEqual(togglePopover(S({ sessionLocked: true }), "media", true), S({ sessionLocked: true }));
+const pk = S({ activeModal: "polkit" });
+assert.deepEqual(togglePopover(pk, "media", true), pk);
+assert.deepEqual(toggleModal(pk, "launcher"), pk);
+assert.deepEqual(toggleModal(pk, "polkit"), pk);
+assert.equal(openModal(S({ activeModal: "launcher" }), "polkit").activeModal, "polkit");
+assert.deepEqual(closeModal(pk), pk);
+assert.equal(closeModal(pk, true).activeModal, "");
+assert.equal(toggleModal(S({ activeModal: "power" }), "power").activeModal, "");
+assert.deepEqual(openLauncherMode(INITIAL, "emoji"), S({ activeModal: "launcher", launcherMode: "emoji" }));
+assert.equal(openLauncherMode(INITIAL, "bogus").launcherMode, "apps");
+assert.deepEqual(lock(S({ activePopover: "media", activeModal: "overview", barFocusActive: true })), S({ sessionLocked: true }));
+assert.equal(openSettings(S({ sessionLocked: true })).emit, false);
+assert.deepEqual(openSettings(S({ activePopover: "media" })), { state: INITIAL, emit: true });
+assert.equal(focusBar(S({ activePopover: "media" })).barFocusActive, true);
+assert.equal(focusBar(S({ activePopover: "media" })).activePopover, "");
+assert.deepEqual(escape(S({ activePopover: "media" }), 1), { state: S({ activePopover: "media" }), consumed: "inline" });
+assert.equal(escape(pk, 0).consumed, "polkit");
+assert.deepEqual(escape(S({ activePopover: "media" }), 0), { state: INITIAL, consumed: "surface" });
+assert.equal(escape(INITIAL, 0).consumed, "none");
+// Review Focus 5: sequences stay consistent
+let s = INITIAL;
+for (const step of [x => togglePopover(x, "media", true), x => toggleModal(x, "launcher"), x => togglePopover(x, "calendar", true),
+                    x => openModal(x, "polkit"), x => toggleModal(x, "power"), x => closeModal(x, true), x => lock(x)])
+  s = step(s);
+assert.deepEqual(s, S({ sessionLocked: true }));
+Object.freeze(INITIAL); assert.doesNotThrow(() => { togglePopover(INITIAL, "media", true); lock(INITIAL); escape(INITIAL, 0); });
+```
+
+- [ ] **Step 2–4:** FAIL → implement → PASS; verify PASS.
+- [ ] **Step 5: Commit** `feat(lib): add the shell lane reducer`
+
+### Task 8: `popoverPlacement.mjs` and `wheel.mjs`
+
+**Files:**
+- Create: `shell/lib/popoverPlacement.mjs`, `tests/lib/popoverPlacement.test.mjs`, `shell/lib/wheel.mjs`, `tests/lib/wheel.test.mjs`
+
+**Depends on:** 2
+**Interfaces:** Produces `02-contracts.md` §2.9, §2.10.
+
+- [ ] **Step 1: Write the failing tests**
+
+```js
+const base = { origin: { x: 1700, y: 4, width: 100, height: 32 }, card: { width: 400, height: 300 },
+  screen: { width: 1920, height: 1080 }, insets: { top: 48, right: 0, bottom: 0, left: 0 }, gap: 8 };
+assert.deepEqual(placePopover({ ...base, edge: "top" }), { x: 1512, y: 56, originX: 238, originY: 0 });
+assert.equal(placePopover({ ...base, edge: "bottom", insets: { top: 0, right: 0, bottom: 64, left: 0 } }).y, 708);
+assert.equal(placePopover({ ...base, edge: "left", insets: { top: 0, right: 0, bottom: 0, left: 56 }, origin: { x: 4, y: 500, width: 48, height: 48 } }).x, 64);
+assert.deepEqual(placePopover({ ...base, edge: "none" }).x, 1512);
+const o = { stepAngle: 120, stepPixels: 40, physical: false };
+assert.deepEqual(wheelStep(0, { angleDeltaY: 120, pixelDeltaY: 0, inverted: false }, o), { acc: 0, steps: 1 });
+let w = { acc: 0 }; const got = [];
+for (let i = 0; i < 3; i++) { w = wheelStep(w.acc, { angleDeltaY: 40, pixelDeltaY: 0, inverted: false }, o); got.push(w.steps); }
+assert.deepEqual(got, [0, 0, 1]);
+assert.equal(wheelStep(0, { angleDeltaY: 0, pixelDeltaY: 39, inverted: false }, o).steps, 0);
+assert.equal(wheelStep(39, { angleDeltaY: 0, pixelDeltaY: 1, inverted: false }, o).steps, 1);
+assert.equal(wheelStep(0, { angleDeltaY: 120, pixelDeltaY: 0, inverted: true }, { ...o, physical: true }).steps, -1);
+assert.equal(wheelStep(0, { angleDeltaY: 120, pixelDeltaY: 0, inverted: true }, o).steps, 1);
+assert.equal(wheelStep(0, { angleDeltaY: -240, pixelDeltaY: 0, inverted: false }, o).steps, -2);
+```
+
+- [ ] **Step 2–4:** FAIL → implement → PASS; verify PASS.
+- [ ] **Step 5: Commit** `feat(lib): add popover placement and wheel accumulation`
+
+### Task 9: `clockFormat.mjs` and `keybinds.mjs`
+
+**Files:**
+- Create: `shell/lib/clockFormat.mjs`, `tests/lib/clockFormat.test.mjs`, `shell/lib/keybinds.mjs`, `tests/lib/keybinds.test.mjs`
+
+**Depends on:** 2
+**Interfaces:** Produces `02-contracts.md` §2.11 and the `clockFormat` rows of §2.12. `ACTIONS` order and default chords are the tables in `01-architecture.md` §7.1–§7.2 (20 actions: `toggleLauncher, launcherClipboard, launcherEmoji, toggleOverview, toggleControlCenter, toggleNotifications, toggleCalendar, toggleMedia, togglePower, toggleCapture, toggleThemeStudio, toggleWidgetPeek, openSettings, focusBar, lock, volumeUp, volumeDown, toggleMute, brightnessUp, brightnessDown`).
+
+- [ ] **Step 1: Write the failing tests**
+
+```js
+assert.equal(clockPattern({ preset: "dateTime", hourCycle: "24h", showSeconds: false }, false).pattern, "ddd d MMM  HH:mm");
+const t = clockPattern({ preset: "time", hourCycle: "12h", showSeconds: true }, false);
+assert.equal(t.pattern, "h:mm:ss AP"); assert.equal(t.needsSeconds, true);
+assert.equal(clockPattern({ preset: "time", hourCycle: "system", showSeconds: false }, true).twelveHour, true);
+assert.equal(clockPattern({ preset: "custom", customFormat: "dddd 'at' HH:mm" }, false).needsSeconds, false);
+assert.equal(clockPattern({ preset: "custom", customFormat: "HH:mm:ss" }, false).needsSeconds, true);
+assert.equal(clockPattern({ preset: "custom", customFormat: "'s' HH" }, false).needsSeconds, false);
+assert.deepEqual(verticalPatterns({ showSeconds: true }, false), ["HH", "mm", "ss"]);
+assert.equal(qtPatternError(""), "Enter a pattern");
+assert.equal(qtPatternError("'oops"), "Close the quoted text with '");
+assert.equal(qtPatternError("'only text'"), "Add at least one date or time code, e.g. HH:mm");
+assert.equal(qtPatternError("HH:mm"), "");
+assert.equal(ACTIONS.length, 20); assert.equal(ACTIONS[0].id, "toggleLauncher"); assert.equal(ACTIONS[19].id, "brightnessDown");
+assert.equal(normalizeChord("shift+super+s"), "Shift+Super+S");
+assert.equal(normalizeChord("Mod4+,"), "Super+Comma");
+assert.equal(normalizeChord("control+alt+Tab"), "Ctrl+Alt+Tab");
+assert.equal(normalizeChord("esc"), "Escape");
+assert.equal(findConflict(defaultBinds(), "Super+A", "toggleMedia"), "toggleControlCenter");
+assert.equal(findConflict(defaultBinds(), "Super+A", "toggleControlCenter"), null);
+assert.equal(canUnbind("togglePower"), false); assert.equal(canUnbind("toggleMedia"), true);
+assert.deepEqual(hyprBindLines("toggleCapture", "Super+Shift+S"), ["bind = SUPER SHIFT, S, global, mat-shell:toggleCapture"]);
+assert.deepEqual(hyprBindLines("toggleCapture", "Print"), ["bind = , Print, global, mat-shell:toggleCapture"]);
+assert.deepEqual(hyprBindLines("toggleLauncher", "Super"), ["bindr = SUPER, Super_L, global, mat-shell:toggleLauncher"]);
+assert.deepEqual(hyprBindLines("openSettings", "Super+Comma"), ["bind = SUPER, comma, global, mat-shell:openSettings"]);
+assert.deepEqual(hyprBindLines("volumeUp", "XF86AudioRaiseVolume"), ["binde = , XF86AudioRaiseVolume, global, mat-shell:volumeUp"]);
+const conf = bindsConf(defaultBinds());
+assert.ok(conf.startsWith("# Generated by mat-shell KeybindService")); assert.ok(conf.endsWith("\n"));
+assert.ok(swaySnippet(defaultBinds()).includes("bindsym Mod4+a exec qs -c mat-shell ipc call shell toggleControlCenter"));
+assert.ok(swaySnippet(defaultBinds()).includes("qs -c mat-shell ipc call shell openLauncherMode clip"));
+assert.ok(swaySnippet(defaultBinds()).includes("qs -c mat-shell ipc call osd changeVolume 5"));
+```
+
+- [ ] **Step 2–4:** FAIL → implement → PASS; verify PASS.
+- [ ] **Step 5: Commit** `feat(lib): add clock patterns and the keybind action model`
+
+### Task 10: Domain helpers
+
+**Files:**
+- Create: `shell/lib/{notifications,launcherQuery,telemetry,session,weather,hyprParse}.mjs`, `tests/lib/{notifications,launcherQuery,telemetry,session,weather,hyprParse}.test.mjs`
+
+**Depends on:** 2
+**Interfaces:** Produces the remaining rows of `02-contracts.md` §2.12.
+
+- [ ] **Step 1: Write the failing tests**
+
+```js
+// notifications
+assert.equal(shouldToast("normal", true), false); assert.equal(shouldToast("critical", true), true);
+assert.equal(toastTimeoutMs("critical", 3000), 0); assert.equal(toastTimeoutMs("normal", -1), 6000);
+assert.equal(toastTimeoutMs("low", 0), 4000); assert.equal(toastTimeoutMs("normal", 9000), 9000);
+assert.equal(sanitizeBody('<b>Hi</b><script>x()</script><a href="javascript:alert(1)">l</a><a href="https://e.com" onclick="x">ok</a> 1 < 2'),
+  '<b>Hi</b>x()l<a href="https://e.com">ok</a> 1 &lt; 2');
+assert.deepEqual(groupHistory([{ id: 1, appName: "A", time: 1 }, { id: 2, appName: "B", time: 3 }, { id: 3, appName: "A", time: 2 }])
+  .map(g => [g.appName, g.items.map(i => i.id)]), [["B", [2]], ["A", [3, 1]]]);
+// launcherQuery
+assert.deepEqual(parseQuery("= 2+2"), { mode: "calc", term: "2+2" });
+assert.deepEqual(parseQuery("win fire"), { mode: "win", term: "fire" });
+assert.deepEqual(parseQuery("winter"), { mode: "apps", term: "winter" });
+assert.deepEqual(parseQuery(":smile"), { mode: "emoji", term: "smile" });
+assert.deepEqual(parseQuery("> lock"), { mode: "cmd", term: "lock" });
+assert.deepEqual(parseQuery("clip"), { mode: "clip", term: "" });
+assert.ok(fuzzyScore("fi", "Firefox") > fuzzyScore("fi", "Profile Manager"));
+assert.equal(fuzzyScore("xyz", "Firefox"), 0);
+const apps = [{ id: "a", name: "Alpha", genericName: "", keywords: [] }, { id: "b", name: "Beta", genericName: "", keywords: [] }];
+assert.equal(rankApps("", apps, { b: 5 })[0].id, "b");
+// telemetry
+assert.deepEqual(parseProcStat("cpu  100 0 50 800 50 0 0 0 0 0\ncpu0 1 1 1 1 1 0 0 0 0 0\n"), { idle: 850, total: 1000 });
+assert.equal(cpuPercent({ idle: 850, total: 1000 }, { idle: 900, total: 1100 }), 50);
+assert.equal(cpuPercent({ idle: 1, total: 1 }, { idle: 1, total: 1 }), 0);
+assert.equal(parseMeminfo("MemTotal: 16000000 kB\nMemFree: 1 kB\nMemAvailable: 4000000 kB\n").usedPercent, 75);
+// session
+const inh = { type: "a(ssssuu)", data: [[["shutdown:sleep", "firefox", "Unsaved form", "block", 1000, 4242], ["idle", "mpv", "Playing", "block", 1000, 7]]] };
+assert.deepEqual(blockingInhibitors(parseInhibitorsJson(inh)).map(i => i.who), ["firefox"]);
+assert.deepEqual(parseInhibitorsJson({}), []);
+assert.deepEqual(logoutCommand("niri", "pawan"), ["niri", "msg", "action", "quit"]);
+assert.deepEqual(ACTION_COMMANDS.shutdown, ["systemctl", "poweroff"]);
+// weather
+const j1 = { current_condition: [{ temp_C: "21", FeelsLikeC: "20", weatherCode: "116", weatherDesc: [{ value: "Partly cloudy" }], humidity: "40", windspeedKmph: "11" }],
+  weather: [{ hourly: [{ time: "0", tempC: "18", weatherCode: "113" }, { time: "300", tempC: "17", weatherCode: "113" }] }] };
+const wx = parseWttr(j1, 1000);
+assert.equal(wx.tempC, 21); assert.equal(wx.code, 116); assert.equal(wx.description, "Partly cloudy"); assert.equal(wx.fetchedAt, 1000);
+assert.equal(parseWttr({}, 1), null);
+assert.equal(isStale(0, 1800001), true); assert.equal(isStale(0, 1800000), false);
+assert.equal(weatherIcon(113, false), "sunny"); assert.equal(weatherIcon(113, true), "clear_night");
+assert.equal(weatherIcon(389, false), "thunderstorm"); assert.equal(weatherIcon(230, false), "weather_snowy"); assert.equal(weatherIcon(296, false), "rainy");
+// hyprParse
+const cl = parseClients([{ address: "0x1", title: "t", class: "firefox", workspace: { id: 2 }, monitor: 0, floating: false, fullscreen: 0, at: [0, 0], size: [800, 600] },
+                         { address: "0x2", title: "f", class: "pavu", workspace: { id: 2 }, monitor: 0, floating: true, fullscreen: 0, at: [0, 0], size: [400, 300] }]);
+assert.equal(cl[0].appId, "firefox"); assert.equal(cl[0].workspaceId, 2); assert.equal(cl[0].fullscreen, false);
+assert.equal(windowsOverlap(cl, { x: 0, y: 0, width: 1920, height: 48 }, 2), true);
+assert.equal(windowsOverlap(cl, { x: 0, y: 0, width: 1920, height: 48 }, 3), false);
+assert.equal(windowsOverlap(cl.slice(1), { x: 0, y: 0, width: 1920, height: 48 }, 2), false);
+```
+
+- [ ] **Step 2–4:** FAIL → implement → PASS; verify PASS.
+- [ ] **Step 5: Commit** `feat(lib): add notification, launcher, telemetry, session, weather and Hyprland helpers`
+
+---
+
+## Phase B — Runtime Bootstrap (Linux target)
+
+### Task 11: Runtime spike, gallery and debug IPC
+
+**Files:**
+- Create: `shell/shell.qml`, `shell/DebugIpc.qml`, `shell/MatShell/Services/qmldir`, `shell/MatShell/State/qmldir`, `shell/MatShell/Primitives/qmldir`, `tests/gallery/shell.qml`
+- Modify: `tests/smoke/ipc-script.txt`
+- Modify (only if the target proves them wrong; describe the fix in the hand-off): `scripts/run-shell.sh`, `scripts/smoke-shell.sh`
+
+**Depends on:** 1
+
+**Interfaces:**
+- Produces: the `debug` IPC target (`01-architecture.md` §7.4) with `state()` returning `{}` for now. Each later task adds its function to `DebugIpc.qml`.
+- The three `qmldir` files start with only their `module` line.
+
+- [ ] **Step 1:** Append `debug state => ^\{` to `tests/smoke/ipc-script.txt`.
+- [ ] **Step 2:** Run `./scripts/smoke-shell.sh` → FAIL (no config yet).
+- [ ] **Step 3:** Write `shell.qml`: `ShellRoot { DebugIpc {} }`, plus `Component.onCompleted: console.info("mat-shell: started, primary " + Tokens.color.primary)`. Write `DebugIpc.qml` as `IpcHandler { target: "debug"; function state(): string { return "{}" } }`. Write `tests/gallery/shell.qml`: `ShellRoot { FloatingWindow { title: "Mat Shell — Primitive Gallery" … } }`, showing five `Rectangle`s coloured `Tokens.color.surfaceTier(0..4)` in a `Flow`.
+- [ ] **Step 4:** Run `./scripts/smoke-shell.sh` → PASS, and `qs -c mat-shell log | grep "mat-shell: started, primary #"` matches. **If `MatShell.Tokens` does not resolve, stop**: report the exact log line (README §4). Do not switch import styles on your own.
+- [ ] **Step 5:** Install matugen. Run `mkdir -p ~/.config/mat-shell/matugen && cp design-system/tokens/matugen/{config.toml,theme.json.tpl} ~/.config/mat-shell/matugen/`, then `matugen color hex "#6750A4" -c ~/.config/mat-shell/matugen/config.toml`. Expect `~/.config/mat-shell/theme.json` to equal `design-system/tokens/matugen/theme.baseline.json` (`diff` prints nothing). Then edit `~/.config/mat-shell/theme.json` and confirm the running shell logs a new primary on restart.
+- [ ] **Step 6:** Run `QML_IMPORT_PATH="$PWD/shell" qs -p tests/gallery` → the window shows five tiers. Run `./scripts/verify-design-system.sh` → PASS.
+- [ ] **Step 7:** Prove the guardrail tools on the target and record each output under "Agent notes" in `docs/handoffs/task-11.md` (the checkpoint-11 reviewer turns these into rules):
+  - `python3 scripts/qs-api.py PanelWindow exclusionMode` → `found: …`; `python3 scripts/qs-api.py PanelWindow exclusionModeX` → `not found: …`. If the first is not found, add `python3 scripts/qs-api.py --paths` and stop with `--stuck`.
+  - `qs --version`, `qtpaths6 --qt-version`, `qmllint --version`, and `qmllint -I shell shell/shell.qml shell/DebugIpc.qml` (advisory).
+  - The JavaScript level of QML's engine, probed outside the repository: `mkdir -p /tmp/mat-jsprobe && printf 'import Quickshell\nShellRoot { Component.onCompleted: { const o = { ...{ a: 1 }, b: null ?? 2, c: ({}).x?.y }; console.info("mat-shell: jsprobe " + JSON.stringify(o) + " " + Object.entries(o).length) } }\n' > /tmp/mat-jsprobe/shell.qml && timeout 10 qs -p /tmp/mat-jsprobe 2>&1 | grep -E "jsprobe|rror"`.
+- [ ] **Step 8: Commit** `feat(shell): bootstrap the Quickshell config, debug IPC and gallery`
+
+---
+
+## Phase C — Core Services and State
+
+### Task 12: `ConfigService`, `AccessibilityService`, and token wiring
+
+**Files:**
+- Create: `shell/MatShell/Services/ConfigService.qml`, `shell/MatShell/Services/AccessibilityService.qml`
+- Modify: `shell/MatShell/Services/qmldir`, `shell/shell.qml` (bind `Tokens` switches to `ConfigService.config.appearance.*`, `.accessibility.*`, `.animations.expressiveSprings`), `shell/DebugIpc.qml` (`config()`), `tests/smoke/ipc-script.txt`
+
+**Depends on:** 4, 11
+
+**Interfaces:**
+- Consumes: `normalizeConfig`, `defaultConfig`, `firstRunPinned`, `FIRST_RUN_PIN_GROUPS`, `diffFromDefaults`.
+- Produces: `02-contracts.md` §3.1 and the `AccessibilityService` row of §3.2.
+
+- [ ] **Step 1:** Append `debug config => "schemaVersion":1` to the smoke script.
+- [ ] **Step 2:** Run the smoke test → FAIL (`config` missing).
+- [ ] **Step 3: Implement**
+  - Read through `FileView { path: Quickshell.env("HOME") + "/.config/mat-shell/config.json"; watchChanges: true; atomicWrites: true; blockLoading: true }`, then `JSON.parse` in try/catch, then `normalizeConfig`.
+  - Writes are debounced by a `Timer { interval: 300; running: root.dirty }` (300ms from `16-settings.md` §5).
+  - Undo stack holds at most 50 entries.
+  - Invalid external edit: set `error` to `"config.json has an error on line N"` and keep the previous `config`.
+- [ ] **Step 4: Run**
+  - `./scripts/smoke-shell.sh` → PASS.
+  - Manual (Review Focus 1): while the shell runs, write `{"bars": [` into `config.json`. Expect `debug config` to still return the last good config and the log to contain `mat-shell:` with the error line. Restore the file and confirm the change reloads.
+  - Delete `config.json`, restart, and confirm the first-run file is written with `pinned` resolved.
+- [ ] **Step 5:** Run lint and verify → PASS.
+- [ ] **Step 6: Commit** `feat(services): add ConfigService with undo, validation and live token switches`
+
+### Task 13: `CompositorService`, `KeyboardService`, `BarWidgetRegistry`
+
+**Files:**
+- Create: `shell/MatShell/Services/{CompositorService,KeyboardService,BarWidgetRegistry}.qml`
+- Modify: `shell/MatShell/Services/qmldir`, `shell/DebugIpc.qml` (`compositor()`), `tests/smoke/ipc-script.txt`
+
+**Depends on:** 3, 10, 12
+**Interfaces:** Consumes `parseClients`, `windowsOverlap`, `widgetCatalog`, `widgetOptions`. Produces the §3.2 rows for these services exactly.
+
+- [ ] **Step 1:** Append `debug compositor => "kind":"(hyprland|niri|other)"`. **Step 2:** Run the smoke test → FAIL.
+- [ ] **Step 3: Implement.**
+  - `CompositorService` on Hyprland builds `workspaces` from `Hyprland.workspaces` and `focusedScreen` from `Hyprland.focusedMonitor` + `Quickshell.screens`.
+  - It refreshes `clients` by running `hyprctl clients -j` on `Hyprland.rawEvent` names `openwindow`, `closewindow`, `movewindow`, `changefloatingmode`, `fullscreen`, `workspace`, coalesced with a 100ms `Timer`.
+  - `KeyboardService` reads `activelayout` raw events and `/sys/class/leds/*::capslock/brightness` through `FileView`.
+- [ ] **Step 4:** Run the smoke test → PASS. Manual: switch workspaces, then confirm `debug compositor` shows the new `focusedWorkspaceId`.
+- [ ] **Step 5:** Run lint and verify → PASS. **Step 6: Commit** `feat(services): add compositor, keyboard and widget registry services`
+
+### Task 14: `BarService`
+
+**Files:**
+- Create: `shell/MatShell/Services/BarService.qml`
+- Modify: `shell/MatShell/Services/qmldir`, `shell/DebugIpc.qml` (`bars()`), `tests/smoke/ipc-script.txt`
+
+**Depends on:** 5, 13
+**Interfaces:**
+- Consumes: `barGeometry.*`, `barConfig.barAppliesToScreen` / `placementProblems`, `CompositorService.windowsOverlap` / `focusedScreen`, `ConfigService.config.bars`.
+- Produces: the §3.2 `BarService` row. `instances` is recomputed when `Quickshell.screens` or the bars change.
+
+- [ ] **Step 1:** Append `debug bars => "insets":\{"top":`. **Step 2:** Run the smoke test → FAIL.
+- [ ] **Step 3: Implement.** The reveal state machine:
+  - `setEdgeHover(id, screen, true)` starts a `barRevealDwellMs` (120) timer that sets revealed.
+  - Leaving starts a 600ms hide timer (`01-bar-system.md` §5).
+  - Every timer's `running` is bound to the pending state.
+- [ ] **Step 4:** Run the smoke test → PASS. Manual (Review Focus 2):
+  - Disconnect a second monitor and confirm `instances` drops its entries with no errors.
+  - Set a bar's `screens` to `["NOPE"]` and confirm it has no instance.
+- [ ] **Step 5:** Run lint and verify → PASS. **Step 6: Commit** `feat(services): add BarService geometry, visibility and regions`
+
+### Task 15: `ShellState`, IPC, and global shortcuts
+
+**Files:**
+- Create: `shell/MatShell/State/ShellState.qml`
+- Modify: `shell/MatShell/State/qmldir`, `shell/DebugIpc.qml` (`state()` real), `tests/smoke/ipc-script.txt`
+
+**Depends on:** 7, 9, 14
+
+**Interfaces:**
+- Consumes: `shellReducer.*`, `keybinds.ACTIONS`, `AccessibilityService.setSwitch`, `NotificationService.dndEnabled`.
+  - `NotificationService` arrives in Task 21. Until then, `dndEnabled` binds to `ConfigService.config.notifications.dnd`; Task 21 switches the binding.
+- Produces: `02-contracts.md` §4 and the IPC tables in `01-architecture.md` §7.1, §7.3.
+
+- [ ] **Step 1: Append the smoke lines**
+
+```text
+shell toggleMedia
+debug state => "activePopover":"media"
+shell toggleOverview
+debug state => "activePopover":"","activeModal":"overview"
+shell toggleOverview
+shell toggleControlCenter
+shell toggleControlCenter
+shell toggleLauncher
+shell toggleLauncher
+shell toggleLauncher
+debug state => "activeModal":"launcher"
+shell toggleLauncher
+mode set floating
+debug config => "desktopMode":"floating"
+mode set tiling
+debug state => "activeModal":"","activePopover":""
+shell setA11y reducedMotion true
+debug config => "reducedMotion":true
+shell setA11y reducedMotion false
+shell toggleMedia
+shell toggleMedia
+shell toggleMedia
+shell toggleLauncher
+shell toggleCalendar
+shell toggleLauncher
+debug state => "activeModal":"","activePopover":""
+```
+
+The last six lines are the Review Focus 5 burst: double toggles and cross-lane hand-offs must end in a clean state.
+
+- [ ] **Step 2:** Run the smoke test → FAIL (no `shell` target).
+- [ ] **Step 3: Implement.**
+  - Each public function calls the reducer and assigns all five lane properties.
+  - Add one `GlobalShortcut { appid: "mat-shell"; name: <id> }` per `ACTIONS` entry with target `shell`, inside a `Loader { active: CompositorService.kind === "hyprland" }`, written with a `Repeater`/`Instantiator` over `ACTIONS`.
+  - `setA11y` delegates to `AccessibilityService`.
+- [ ] **Step 4:** Run the smoke test → PASS. Manual: after Task 22 writes `binds.conf`, `Super+A` toggles the state (note it as pending in the hand-off).
+- [ ] **Step 5:** Run lint and verify → PASS. **Step 6: Commit** `feat(state): add ShellState lanes, IPC handlers and global shortcuts`
+
+---
+
+## Phase D — Primitives
+
+Every primitive task follows the same steps:
+1. Add each new primitive to `tests/gallery/shell.qml` in every state (rest, hover hint text, pressed, disabled, focused-by-keyboard, active).
+2. Run the gallery → FAIL (`M3X is not a type`).
+3. Implement each primitive per `02-contracts.md` §5 and its spec section, and register it in `Primitives/qmldir`.
+4. Run the gallery → every state renders.
+5. Run the manual checks: Tab reaches every interactive item; the focus ring shows only after a key press; Enter/Space activate; `setA11y reducedMotion true` makes radius and scale changes jump; `highContrast true` shows outline borders and a 3px ring.
+6. Run lint and verify → PASS.
+7. Commit.
+
+### Task 16: Surfaces set
+
+**Files:**
+- Create: `shell/MatShell/Primitives/{M3StateLayer,M3Surface,M3Divider,M3Card,M3GlassPanel,M3Scrim,M3Tooltip}.qml`
+- Modify: `shell/MatShell/Primitives/qmldir`, `tests/gallery/shell.qml`
+
+**Depends on:** 11
+**Interfaces:** Produces the §5 rows for these seven. `M3Surface` follows `primitives/01` §1.2 exactly (state layer, focus ring, `TapHandler` for Left|Right|Middle, tooltip after 450ms, `keyPressed`, pressed scale `0.97`).
+
+- [ ] Steps 1–7 as above. **Commit:** `feat(primitives): add surface, card, divider, scrim, state layer and tooltip`
+
+### Task 17: Controls set
+
+**Files:**
+- Create: `shell/MatShell/Primitives/{M3Button,M3IconButton,M3SegmentedButton,M3FilterChip,M3Switch,M3Slider}.qml`
+- Modify: `shell/MatShell/Primitives/qmldir`, `tests/gallery/shell.qml`
+
+**Depends on:** 16
+**Interfaces:**
+- Produces the §5 rows.
+- `M3Slider` follows `primitives/03` §2.3, and its wheel uses `wheel.mjs` with `physical: true`.
+- The muted track is `withAlpha(onSurface, 0.38)` (C13).
+
+- [ ] Steps 1–7. Extra manual check: on `M3Slider`, Home/End/PageUp/PageDown/Shift+arrow give the step sizes in the spec. **Commit:** `feat(primitives): add buttons, segmented button, chip, switch and slider`
+
+### Task 18: Inputs, progress, menu
+
+**Files:**
+- Create: `shell/MatShell/Primitives/{M3TextField,M3SearchField,M3CircularProgress,M3LinearProgress,M3ScrollBar,M3ContextMenu}.qml`
+- Modify: `shell/MatShell/Primitives/qmldir`, `tests/gallery/shell.qml`
+
+**Depends on:** 17, 13 (`KeyboardService`)
+**Interfaces:** Produces the §5 rows. `M3ContextMenu` keyboard follows `primitives/04` §2.2 (wrap, Home/End, letter jump, Escape closes one level).
+
+- [ ] Steps 1–7. Extra manual checks:
+  - A password field never shows its text in the log.
+  - The caps-lock row appears with Caps Lock on.
+- **Commit:** `feat(primitives): add text fields, progress indicators, scroll bar and context menu`
+
+### Task 19: Shell-specific primitives
+
+**Files:**
+- Create: `shell/MatShell/Primitives/{M3BarPill,M3AppIcon,M3PolygonSurface,M3DuotoneClock,M3HoldToConfirm,M3ScreenCorners,M3Popover}.qml`, `shell/surfaces/corners/ScreenCorners.qml` (`Variants { model: Quickshell.screens; M3ScreenCorners {} }`)
+- Modify: `shell/MatShell/Primitives/qmldir`, `tests/gallery/shell.qml`, `shell/shell.qml` (instantiate `ScreenCorners`)
+
+**Depends on:** 8, 15, 18
+
+**Interfaces:**
+- Produces the §5 rows.
+- `M3Popover` places its card with `placePopover` (screen-local origin from `ShellState.popoverOriginRect`), takes its mask from `BarService.regions(screen)` through 8 `BarHole` regions, and binds `screen` per `01-architecture.md` §3.
+- `M3HoldToConfirm` follows `primitives/02` §7.2 and uses `Tokens.motion.holdToConfirmMs` / `holdDrainMs` / `holdTapHintThreshold`.
+
+- [ ] Steps 1–7. Extra manual checks:
+  - A hold of under 15% plays the nudge; a full hold fires `confirmed()`; with `confirmByHold` false, two presses confirm.
+  - Corners render on every screen and pass clicks through.
+- **Commit:** `feat(primitives): add bar pill, app icon, polygon, duotone clock, hold-to-confirm, corners and popover`
+
+---
+
+## Phase E — Device and Domain Services
+
+Each service task:
+1. Appends `debug <name>` expectations (`=> "available":(true|false)` style) to the smoke script.
+2. Implements the §3.2 rows. Every `Process.command` is an array (R06), and every timer is consumer-gated (R07).
+3. Records in the hand-off the output of each `debug` call on the target machine **and** on a machine or VM without the hardware (Review Focus 3).
+
+### Task 20: Audio, brightness, battery, network, Bluetooth
+
+**Files:**
+- Create: `shell/MatShell/Services/{AudioService,BrightnessService,BatteryService,NetworkService,BluetoothService}.qml`
+- Modify: `shell/MatShell/Services/qmldir`, `shell/DebugIpc.qml` (`audio()`, `battery()`, `network()`), `tests/smoke/ipc-script.txt`
+
+**Depends on:** 12
+**Interfaces:**
+- Produces the §3.2 rows.
+- `AudioService` must contain `PwObjectTracker { objects: [root.sink, root.source] }`.
+- Before writing `BluetoothService`, read `https://quickshell.org/docs/v0.3.2/types/Quickshell.Bluetooth/` and copy the member names you use into a comment block at the top of the file.
+
+- [ ] **Step 1:** Append `debug audio => "volume":`, `debug battery => "present":`, `debug network => "wifiEnabled":`. **Step 2:** Run the smoke test → FAIL.
+- [ ] **Step 3: Implement.** `NetworkService.connect(ssid, password)` runs `["nmcli", "dev", "wifi", "connect", ssid, "password", password]`. The password is an array element (R06, R08) and is never logged.
+- [ ] **Step 4:** Run the smoke test → PASS. Run the manual hardware-absent check.
+- [ ] **Step 5:** Run lint and verify → PASS. **Step 6: Commit** `feat(services): add audio, brightness, battery, network and Bluetooth services`
+
+### Task 21: Media, notifications, telemetry, weather
+
+**Files:**
+- Create: `shell/MatShell/Services/{MediaService,NotificationService,TelemetryService,WeatherService}.qml`
+- Modify: `shell/MatShell/Services/qmldir`, `shell/DebugIpc.qml` (`media()`, `notifications()`), `shell/MatShell/State/ShellState.qml` (`dndEnabled` → `NotificationService.dndEnabled`), `tests/smoke/ipc-script.txt`
+
+**Depends on:** 10, 15
+
+**Interfaces:**
+- Produces the §3.2 rows.
+- `NotificationService` hosts the only `NotificationServer` (all five flags true, C05). It filters toasts with `shouldToast` and times them out with `toastTimeoutMs`.
+- `MediaService` runs its position `Timer` only while `positionActive && isPlaying`.
+
+- [ ] **Step 1:** Append `debug notifications => "unreadCount":0` and `debug media => "players":`. **Step 2:** Run the smoke test → FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4:** Run the smoke test → PASS. Manual:
+  - Run `notify-send "t" "<b>x</b><script>y</script>"`. `debug notifications` shows one item, and the stored body is the sanitized string.
+  - Run `notify-send -u critical t c` with DND on: it still toasts (checked in Task 29 UI).
+- [ ] **Step 5:** Run lint and verify → PASS. **Step 6: Commit** `feat(services): add media, notification, telemetry and weather services`
+
+### Task 22: Theme, keybinds, session, capture, polkit, launcher, settings index
+
+**Files:**
+- Create: `shell/MatShell/Services/{ThemeService,KeybindService,SessionService,CaptureService,PolkitService,LauncherService,SettingsIndex}.qml`
+- Modify: `shell/MatShell/Services/qmldir`, `shell/DebugIpc.qml` (`keybindConflict()`), `tests/smoke/ipc-script.txt`
+
+**Depends on:** 9, 10, 13
+
+**Interfaces:**
+- Produces the §3.2 rows.
+- Read `https://quickshell.org/docs/v0.3.2/types/Quickshell.Services.Polkit/` before writing `PolkitService`, and copy the members into its header comment.
+- `ThemeService` uses the matugen command from `interactions/03` §2.4 verbatim.
+- `KeybindService` writes `binds.conf` with `bindsConf()` and then runs `["hyprctl", "reload"]`.
+
+- [ ] **Step 1:** Add `keybindConflict(id: string, chord: string): string` to `DebugIpc.qml` (returns `KeybindService`'s conflict check without saving) and append `debug keybindConflict toggleMedia Super+A => ^toggleControlCenter$`.
+- [ ] **Step 2:** Run the smoke test → FAIL. **Step 3: Implement.**
+- [ ] **Step 4:** Run the smoke test → PASS. Manual:
+  - Source `~/.config/mat-shell/binds.conf` from `hyprland.conf`; `Super+A` now toggles the control-center state (the Task 15 pending item).
+  - `ThemeService.applyScheme("scheme-vibrant")` regenerates `theme.json`, and a failing matugen run keeps the old file.
+  - The other services are exercised through their surfaces in Phases F–I.
+- [ ] **Step 5:** Run lint and verify → PASS. **Step 6: Commit** `feat(services): add theme, keybind, session, capture, polkit, launcher and settings index services`
+
+---
+
+## Phase F — Bars and OSD
+
+### Task 23: Bar windows and simple widgets
+
+**Files:**
+- Create: `shell/bar/{Bars,BarWindow,BarLayout,BarWidgetLoader,PrivacyFallback}.qml`, `shell/bar/widgets/{Separator,Spacer,Settings,Power,WidgetPeek,Launcher,Search}Widget.qml`
+- Modify: `shell/shell.qml`, `tests/smoke/ipc-script.txt`
+
+**Depends on:** 14, 15, 19
+
+**Interfaces:**
+- Consumes: the `BarService` and `BarWidgetRegistry` APIs.
+- Produces: the widget contract (`02-contracts.md` §6).
+- `BarWindow` takes the exact layer row from `01-architecture.md` §4, `exclusiveZone: BarGeometry.exclusiveZone(bar, shown, Tokens.desktopMode)`, and the hit-strip/reveal-strip mask.
+
+- [ ] **Step 1:** Append `debug bars => "exclusiveZone":48` and `debug bars => "shown":true` (the default top bar). **Step 2:** Run the smoke test → FAIL.
+- [ ] **Step 3: Implement.** Same-edge bars stack in config order with `stackOffsets`. Hidden bars slide out with `springDefaultSpatial`.
+- [ ] **Step 4:** Run the smoke test → PASS. Run the manual matrix rows: **bar edge × style × thickness** and **desktop mode** (auto-visibility dodges in tiling).
+- [ ] **Step 5:** Run lint and verify → PASS. **Step 6: Commit** `feat(bar): add config-driven bar windows, loader and simple widgets`
+
+### Task 24: Workspace, window title, submap, clock, keyboard layout, telemetry widgets
+
+**Files:**
+- Create: `shell/bar/widgets/{Workspaces,WindowTitle,Submap,Clock,KeyboardLayout,Telemetry}Widget.qml`
+
+**Depends on:** 23, 9, 21
+
+**Interfaces:**
+- Every customisable widget binds `opt` via `BarWidgetRegistry.resolve` (G13).
+- `ClockWidget` uses `clockPattern` / `verticalPatterns` and sets `SystemClock.precision` from `needsSeconds`.
+- `TelemetryWidget` owns a `Timer { interval: opt.interval * 1000; running: visible }` that calls `TelemetryService.sample(opt.metrics, opt.diskMount)`.
+
+- [ ] **Step 1:** Add the manual cases. For each option in `02-bar-widgets.md` §1.3 for these widgets, edit `config.json` and confirm the bar updates live without a restart.
+- [ ] **Step 2: Implement.**
+- [ ] **Step 3:** Run the smoke test → PASS; run the manual option cases on a horizontal and a vertical bar.
+- [ ] **Step 4:** Run lint and verify → PASS. **Step 5: Commit** `feat(bar): add workspace, window title, submap, clock, layout and telemetry widgets`
+
+### Task 25: Control center, notifications, media, tray, privacy, recording, apps widgets, and overflow
+
+**Files:**
+- Create: `shell/bar/widgets/{ControlCenter,Notifications,Media,Tray,Privacy,Recording,Apps}Widget.qml`
+- Modify: `shell/bar/BarLayout.qml` (overflow via `planOverflow` and a chevron `M3ContextMenu` listing `hidden`)
+
+**Depends on:** 6, 20, 21, 24
+
+**Interfaces:**
+- Popover openers register their triggers (contract §6).
+- Middle-click and scroll follow `01-architecture.md` §5.2.
+- Privacy and recording never collapse (`overflowPriority: null`).
+
+- [ ] **Step 1:** Append open/close lines for every popover the widgets open (`shell toggleMedia` × 2 …).
+- [ ] **Step 2: Implement.**
+- [ ] **Step 3:** Run the smoke test → PASS. Manual:
+  - On a two-bar setup, clicking the clock on the second bar opens the calendar on that bar's screen, growing from that pill.
+  - Shrink the bar to its minimum length: telemetry hides first and the chevron lists it.
+  - Remove `privacy` from every bar, start `arecord`, and the fallback pill appears.
+- [ ] **Step 4:** Run lint and verify → PASS. **Step 5: Commit** `feat(bar): add status widgets, apps dock and overflow handling`
+
+### Task 26: OSD
+
+**Files:**
+- Create: `shell/surfaces/osd/OsdHud.qml`
+- Modify: `shell/shell.qml`, `tests/smoke/ipc-script.txt`
+
+**Depends on:** 20, 19
+**Interfaces:**
+- Produces `IpcHandler { target: "osd" }` (`01-architecture.md` §7.2) and the `mat-osd` row.
+- Auto-hide after `1800ms` (`07-osd-huds.md` §5).
+- Readouts use tnum; changes are announced with `Accessible.announce`.
+
+- [ ] **Step 1:** Append `osd changeVolume 5`, `osd changeVolume -5`, `osd toggleMute`, `osd toggleMute`, `osd changeBrightness 5`, `osd changeBrightness -5`. **Step 2:** Run the smoke test → FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4:** Run the smoke test → PASS. Manual: the OSD never takes focus while typing in a terminal; it sits above the bottom bar using `maxInsets`.
+- [ ] **Step 5:** Run lint and verify → PASS. **Step 6: Commit** `feat(surfaces): add the OSD HUD`
+
+---
+
+## Phase G — Popovers and Notifications
+
+Surface tasks follow the surface contract (`02-contracts.md` §7) and the spec file's §3–§6 for visuals, states, and motion. Each one appends open → interact → close smoke lines, runs the manual matrix rows that apply, and seals through the gate.
+
+### Task 27: Control Center
+
+**Files:**
+- Create: `shell/surfaces/controlcenter/{ControlCenter,QuickTile,WifiSheet,AudioSheet,A11ySheet}.qml`
+- Modify: `shell/shell.qml`, `tests/smoke/ipc-script.txt`
+
+**Depends on:** 19, 20, 21
+**Spec:** `03-control-center.md`. Only one sub-sheet is open at a time (`inlineDepth` 1 while open). Tile hotkeys `1..8` work only while `Tokens.keyboardModality` is true. The Wi-Fi password field switches focus to `Exclusive`.
+
+- [ ] **Steps:**
+  1. Smoke lines: `shell toggleControlCenter`, `debug state => "control_center"`, `shell toggleControlCenter`.
+  2. Implement.
+  3. Run the smoke test.
+  4. Manual: bar edge × theme × a11y rows; Escape collapses the sheet, then closes the popover; opening from a bottom bar grows upward.
+  5. Run lint and verify.
+  6. Commit `feat(surfaces): add the control center`.
+
+### Task 28: Calendar & weather, and media popover
+
+**Files:**
+- Create: `shell/surfaces/calendar/CalendarWeatherPanel.qml`, `shell/surfaces/media/MediaPopover.qml`
+- Modify: `shell/shell.qml`, `tests/smoke/ipc-script.txt`
+
+**Depends on:** 19, 21
+**Spec:** `05-calendar-and-weather.md`, `06-media-player-popover.md`. Weather offline state: `cloud_off` + `"Weather unavailable — last updated …"` + `Retry`. Media sets `MediaService.positionActive = open`. Album art never rotates; only the polygon outline does.
+
+- [ ] **Steps:**
+  1. Smoke lines for `toggleCalendar` and `toggleMedia` open/close.
+  2. Implement.
+  3. Run the smoke test.
+  4. Manual: unplug the network → offline card; no seconds tick while closed (check with `debug`/log).
+  5. Run lint and verify.
+  6. Commit `feat(surfaces): add calendar, weather and media popovers`.
+
+### Task 29: Notification toasts and center
+
+**Files:**
+- Create: `shell/surfaces/notifications/{NotificationToasts,NotificationCenter,NotificationCard}.qml`
+- Modify: `shell/shell.qml`, `tests/smoke/ipc-script.txt`
+
+**Depends on:** 19, 21
+**Spec:** `04-notifications.md`. The toast mask is `Region { item: toastColumn }`. Hover pauses the countdown. Critical toasts are persistent and break through DND. Every toast is archived in the center. The body renders as `Text.StyledText` from `sanitizeBody`.
+
+- [ ] **Steps:**
+  1. Smoke lines: `shell toggleNotifications` × 2; manual `notify-send` cases including `<script>` and a 2,000-character body (Review Focus 4).
+  2. Implement.
+  3. Run the smoke test.
+  4. Manual: toast corner from `config.notifications.toastCorner`; inline reply takes focus only while replying.
+  5. Run lint and verify.
+  6. Commit `feat(surfaces): add notification toasts and center`.
+
+---
+
+## Phase H — Settings
+
+### Task 30: Settings window and non-bar pages
+
+**Files:**
+- Create: `shell/surfaces/settings/{SettingsWindow,SettingsNavItem,SettingsSearchResults,SettingsSnackbar}.qml`, `shell/surfaces/settings/pages/{Appearance,Theme,Widgets,Notifications,Keybindings,Animations,Accessibility,About}Page.qml`
+- Modify: `shell/shell.qml`, `tests/smoke/ipc-script.txt`
+
+**Depends on:** 22, 19
+**Spec:** `16-settings.md` §1–§3.1, §3.3, §4–§7.
+- `FloatingWindow` titled `"Settings — Mat Shell"`, size 1040×700, minimum 720×520.
+- Compact layout below `Tokens.metrics.settingsCompactBreakpoint`.
+- Settings is refused while locked or security-active.
+- The Keybindings page uses `KeybindService`.
+
+- [ ] **Steps:**
+  1. Smoke lines: `shell openSettings keybindings` and `shell openSettings appearance`.
+  2. Implement.
+  3. Run the smoke test.
+  4. Manual: keyboard-only navigation (`Ctrl+F`, `Ctrl+PgUp/PgDn`, `F6`, `Escape` order); search highlights the row.
+  5. Run lint and verify.
+  6. Commit `feat(settings): add the settings window and general pages`.
+
+### Task 31: Bars page and widget options form
+
+**Files:**
+- Create: `shell/surfaces/settings/pages/BarsPage.qml`, `shell/surfaces/settings/pages/bars/{BarSectionsEditor,WidgetChip,WidgetPalette,WidgetOptionsForm,WidgetOptionsHeader,OptionRow,BarPreview}.qml`
+
+**Depends on:** 30, 25
+**Spec:** `16-settings.md` §3.2 (items 1–8), §8 skeletons.
+- `WidgetOptionsForm` renders any schema generically through `OptionRow`, which picks the primitive by `field.kind`.
+- The edit icon shows only when `hasOptions`.
+- The customised dot shows when `diffFromDefaults` is non-empty.
+- Reset removes `options`.
+- Reference behaviour: `showcase/index.html` Bars page (visual only, G16).
+
+- [ ] **Steps:**
+  1. Manual case list: every widget option in `02-bar-widgets.md` §1.3 changes the real bar live; horizontal-only fields are disabled with `Horizontal bars only` on a left bar; `multiChoice` limits; invalid custom clock pattern keeps the last valid value; Undo restores.
+  2. Implement.
+  3. Run the smoke test.
+  4. Run the manual cases.
+  5. Run lint and verify.
+  6. Commit `feat(settings): add the bars editor and generic widget options form`.
+
+---
+
+## Phase I — Overlays and Session Surfaces
+
+### Task 32: Launcher and overview
+
+**Files:**
+- Create: `shell/surfaces/launcher/{AppCommandLauncher,LauncherRow}.qml`, `shell/surfaces/overview/WorkspaceOverview.qml`
+- Modify: `shell/shell.qml`, `tests/smoke/ipc-script.txt`
+
+**Depends on:** 22, 19
+**Spec:** `08-app-and-command-launcher.md` (prefixes via `parseQuery`, 8 rows, `Alt+1..8`, the no-results fallback rows, skeleton rows for slow sources, scrim `Tokens.metrics.scrimAlpha` per C11); `09-workspace-and-window-overview.md` (2×5 grid per C04; screencopy only while open).
+
+- [ ] **Steps:**
+  1. Smoke lines: `shell toggleLauncher` × 2, `shell openLauncherMode emoji`, `shell toggleLauncher`, `shell toggleOverview` × 2.
+  2. Implement.
+  3. Run the smoke test.
+  4. Manual: tiling vs floating layouts; `= 48 * 1.18` shows the calc card; clipboard rows run through `cliphist` with arguments, not interpolation.
+  5. Run lint and verify.
+  6. Commit `feat(surfaces): add the launcher and workspace overview`.
+
+### Task 33: Capture, theme studio, desktop widgets
+
+**Files:**
+- Create: `shell/surfaces/capture/ScreenCaptureHud.qml`, `shell/surfaces/themestudio/WallpaperThemePicker.qml`, `shell/surfaces/desktopwidgets/DesktopWidgetsLayer.qml`
+- Modify: `shell/shell.qml`, `tests/smoke/ipc-script.txt`
+
+**Depends on:** 22, 19, 21
+**Spec:**
+- `13-screen-capture-and-recording.md`: the overlay drops focus and closes when recording starts; Reduced Motion uses a border pulse.
+- `14-wallpaper-and-theme-picker.md`: anchors per C03; previews with `--dry-run`; Undo snackbar.
+- `15-desktop-widgets-layer.md`: no seconds clock; telemetry every 2500/10000ms only while visible; Peek is a Lane 3 modal; Legibility Guard (R23).
+
+- [ ] **Steps:**
+  1. Smoke lines: `shell toggleCapture` × 2, `shell toggleThemeStudio` × 2, `shell toggleWidgetPeek` × 2.
+  2. Implement.
+  3. Run the smoke test.
+  4. Manual: a screenshot lands in `~/Pictures/Screenshots` and the clipboard; recording shows the bar pill and stops on click; a theme apply failure keeps the old theme and shows stderr.
+  5. Run lint and verify.
+  6. Commit `feat(surfaces): add capture, theme studio and desktop widgets`.
+
+### Task 34: Lock screen, power menu, polkit dialog
+
+**Files:**
+- Create: `shell/surfaces/lock/LockScreen.qml`, `shell/surfaces/power/PowerSessionMenu.qml`, `shell/surfaces/polkit/PolkitDialog.qml`
+- Modify: `shell/shell.qml`, `tests/smoke/ipc-script.txt`
+
+**Depends on:** 22, 19
+**Spec:**
+- `10-lock-screen.md`: `PamContext` responds only in `onResponseRequiredChanged`; the field holds focus from the moment of lock; the buffer is cleared on failure.
+- `11-power-and-session-menu.md`: no prose (R09); hold-to-confirm; inhibitor chip from `SessionService.inhibitors`; Lock calls `ShellState.lockSession()`.
+- `12-polkit-authentication-dialog.md`: via `PolkitService`; attempts left shown and announced; C12.
+
+- [ ] **Steps:**
+  1. Smoke lines: `shell togglePower` × 2 (never `lock` in the automated script; test lock manually with a second TTY ready).
+  2. Implement.
+  3. Run the smoke test.
+  4. Manual:
+     - `pkexec true` shows the dialog over an open launcher (polkit preempts) and only cancel or authenticate closes it.
+     - A wrong password shakes (unless Reduced Motion) and shows attempts left.
+     - Lock while a popover is open closes it first.
+     - After the wrong-password test, `qs -c mat-shell log | grep -c "<your test password>"` prints `0` (R08).
+  5. Run lint and verify.
+  6. Commit `feat(surfaces): add lock screen, power menu and polkit dialog`.
+
+---
+
+## Done When
+
+- All 34 tasks are sealed (`python3 scripts/matstate.py log`).
+- `./scripts/verify-design-system.sh` and `./scripts/smoke-shell.sh` pass on the target.
+- The full manual matrix (`docs/lld/04-testing.md` §4) is recorded for the default "Top bar + Dock" preset and the "Left rail" preset.

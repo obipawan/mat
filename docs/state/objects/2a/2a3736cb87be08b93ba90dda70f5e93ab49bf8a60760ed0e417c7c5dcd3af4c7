@@ -1,0 +1,43 @@
+// wttr.in parsing and weather icons (docs/lld/02-contracts.md §2.12; spec 05-calendar-and-weather.md).
+
+const num = (v) => {
+  const n = parseFloat(v);
+  return isFinite(n) ? n : null;
+};
+
+export function parseWttr(json, fetchedAt) {
+  const cc = json && Array.isArray(json.current_condition) ? json.current_condition[0] : null;
+  if (!cc || num(cc.temp_C) === null) return null;
+  const day = (i) => (json.weather && json.weather[i] && Array.isArray(json.weather[i].hourly) ? json.weather[i].hourly : []);
+  const slot = (d) => (h) => ({ day: d, hour: Math.floor((num(h.time) || 0) / 100), tempC: num(h.tempC), code: num(h.weatherCode) });
+  const today = day(0).map(slot(0));
+  const all = today.concat(day(1).map(slot(1)));
+  const hour = new Date(fetchedAt).getHours();
+  const start = today.findIndex((s) => s.hour >= hour);
+  return {
+    tempC: num(cc.temp_C),
+    feelsLikeC: num(cc.FeelsLikeC),
+    code: num(cc.weatherCode),
+    description: Array.isArray(cc.weatherDesc) && cc.weatherDesc[0] ? String(cc.weatherDesc[0].value || "") : "",
+    humidity: num(cc.humidity),
+    windKph: num(cc.windspeedKmph),
+    hourly: all.slice(start < 0 ? today.length : start).slice(0, 6),
+    fetchedAt,
+  };
+}
+
+export function isStale(fetchedAt, now, maxAgeMs = 1800000) {
+  return now - fetchedAt > maxAgeMs;
+}
+
+const SNOW = [179, 227, 230, 323, 326, 329, 332, 335, 338, 368, 371];
+
+export function weatherIcon(code, night) {
+  if (code === 113) return night ? "clear_night" : "sunny";
+  if (code === 116) return night ? "partly_cloudy_night" : "partly_cloudy_day";
+  if (code === 119 || code === 122) return "cloud";
+  if ([143, 248, 260].includes(code)) return "foggy";
+  if ([200, 386, 389, 392, 395].includes(code)) return "thunderstorm";
+  if (SNOW.includes(code)) return "weather_snowy";
+  return "rainy";
+}

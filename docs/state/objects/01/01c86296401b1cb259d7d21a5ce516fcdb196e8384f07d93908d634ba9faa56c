@@ -1,0 +1,25 @@
+# Task 7: `shellReducer.mjs` — gate receipt
+
+Written by `scripts/task-gate.py` from real command output. Edit only the last two sections.
+
+## Hand-off
+
+```text
+Task: 7 `shellReducer.mjs`
+Files: A shell/lib/shellReducer.mjs; A tests/lib/shellReducer.test.mjs
+Red run: FAIL as expected before implementation: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/Users/pawan.kumarm/workspace/mat/shell/lib/shellReducer.mjs' imported from /Users/pawan.kumarm/workspace/mat/tests/lib/shellReducer.test.mjs
+Scope: ✓ check-scope: Task 7 changed 3 files, all in its Files list
+Tests: tests 110 pass 100 fail 0 skipped 10
+Verify: === ALL CHECKS PASSED SUCCESSFULLY ===
+Lint suppressions: 0
+```
+
+## Agent notes
+
+- Spec conflicts met: none
+- Questions for the design owner: none
+- Not done / follow-ups: none
+
+## Manual checks
+
+- none (pure logic task)

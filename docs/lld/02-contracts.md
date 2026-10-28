@@ -14,6 +14,11 @@ Notation: `fn(a: T, b?: T = default): R`. `Bar`, `Field` and similar types are d
 - **Warnings** are written by the caller as `console.warn("mat-shell: " + w)`.
 - **Units.** Pixels are logical px; durations are ms; percentages are `0..100` in `lib/` and `0..1` where Quickshell uses `0..1` (`PwNode.audio.volume`); every conversion is named in the contract.
 - **Booleans** are named as states (`shown`, `muted`, `dndEnabled`), never as negatives.
+- **Own keys only.** Lookups by a user-supplied key (config keys, bar ids, widget option keys, keybind ids) use own properties (`Object.prototype.hasOwnProperty.call`), and such keys are written as own data properties (`Object.defineProperty`), never with `obj[key] = …` or `Object.assign`, which treat `__proto__` as the prototype. Names like `constructor` or `__proto__` are ordinary unknown keys.
+- **Deterministic everywhere.** Sorts break every tie explicitly (never rely on sort stability) and compare names case-insensitively by code point (never `localeCompare`, which follows the system locale in QML). A list that may come from a QML property rather than JSON is read with `Array.from(x || [])`.
+- **Paths.** In every spec, `~/.config/mat-shell/` means `ConfigService.configDir`, `~/.cache/mat-shell/` means `ConfigService.cacheDir`, and any other `~/` means `ConfigService.homeDir` (all from `paths.userDirs`, so `$XDG_CONFIG_HOME` and `$XDG_CACHE_HOME` are honoured). Only `ConfigService` reads `HOME` or `XDG_*` (`ColorTokens` repeats the same rule, because tokens cannot import services). Files the shell ships and reads at runtime live under `Quickshell.shellDir + "/assets/"`; nothing reads `design-system/`, `scripts/` or `docs/` at runtime (G23). The shell never needs root (no `sudo`, no `pkexec`).
+- **Declared commands.** Every program a `Process` or `execDetached` starts is a key of `commands` in `packaging/dependencies.json` (G22). Adding one is a contract change (README §4).
+- **Closed member lists.** A `lib/` module exports exactly the names in its §2 table. A service or `ShellState` declares, at its root, exactly the members in its §3/§4 row; anything else is private and its name starts with `_` (`property var _triggerItems`, `function _parse(text)`), and no other file may read it. `docs/lld/contracts.json` is generated from this file (`python3 scripts/gen-contracts.py`); lint rule G21 and `tests/lib/contracts.test.mjs` enforce it.
 
 ---
 
@@ -30,18 +35,22 @@ Each module has a test file `tests/lib/<module>.test.mjs` (see the plan for the 
 | `pascalCase(s: string): string` | `"controlCenter"` → `"ControlCenter"` |
 
 ### 2.2 `generated/widgetOptionsSchema.mjs` and `generated/barPresets.mjs`
-Written by `scripts/gen-shell-data.py` from `design-system/tokens/m3-tokens.json`. Exports:
-- `WIDGET_OPTIONS: { [type: string]: Field[] }` (= `modes.bars.widgetOptions` without `$spec`)
-- `WIDGET_OPTION_MIGRATIONS` (= `modes.bars.widgetOptionMigrations`)
-- `BAR_PRESETS: { [name: string]: { label: string, default?: boolean, bars: RawBar[] } }`
-- `BAR_GUARDRAILS` (= `modes.bars.guardrails`), `WIDGET_TYPES: string[]`
+Written by `scripts/gen-shell-data.py` from `design-system/tokens/m3-tokens.json`.
+
+| Module | Export | Contract |
+|---|---|---|
+| `generated/widgetOptionsSchema.mjs` | `WIDGET_OPTIONS: { [type: string]: Field[] }` | `modes.bars.widgetOptions` without `$spec` |
+| | `WIDGET_OPTION_MIGRATIONS` | `modes.bars.widgetOptionMigrations` |
+| `generated/barPresets.mjs` | `BAR_PRESETS: { [name: string]: { label: string, default?: boolean, bars: RawBar[] } }` | `modes.bars.presets` |
+| | `BAR_GUARDRAILS` | `modes.bars.guardrails` |
+| | `WIDGET_TYPES: string[]` | widget types in `02-bar-widgets.md` §1.1 order |
 
 `Field` = `{ key, kind, label, default, help?, choices?: [{value, label, icon?}], min?, max?, step?, unit?, maxLength?, visibleWhen?: {key, equals | notEquals | includes}, orientations?: "both"|"horizontal"|"vertical", group? }` (spec: `02-bar-widgets.md` §1.2).
 
 ### 2.3 `widgetCatalog.mjs`
 | Export | Contract |
 |---|---|
-| `CATALOG: CatalogEntry[]` | One entry per `WIDGET_TYPES` item, in §1.1 order: `{ type, label, icon, description, customisable, overflowPriority, security }` |
+| `CATALOG: CatalogEntry[]` | One entry per `WIDGET_TYPES` item, in `02-bar-widgets.md` §1.1 order: `{ type, label, icon, description, customisable, overflowPriority, security }` |
 | `catalogEntry(type: string): CatalogEntry \| null` | `null` for unknown types |
 | `sourceFile(type: string): string` | `"widgets/" + pascalCase(type) + "Widget.qml"` |
 
@@ -78,7 +87,7 @@ Values (label and description copied from `02-bar-widgets.md` §1.1; `overflowPr
 | `hasOptions(type): boolean` | schema exists and is non-empty |
 | `optionsSchema(type): Field[]` | `[]` for unknown types |
 | `fieldApplies(field: Field, orientation: "horizontal"\|"vertical"): boolean` | `!field.orientations \|\| "both" \|\| === orientation` |
-| `resolve(type, options: object\|null, orientation): object` | For each field, in schema order: the stored value if present **and** the field applies, else `default`. `number`: `clamp` to `min..max` (non-numeric → default). `choice`: unknown value → default. `multiChoice`: drop unknown values and duplicates, cut to `max`, below `min` → default. `appList`: non-array → default. Unknown keys are **not** in the result. |
+| `resolve(type, options: object\|null, orientation): object` | For each field, in schema order: the stored value if present **and** the field applies, else `default`. `number`: `clamp` to `min..max` (anything but a finite number → default). `choice`: unknown value → default. `toggle`: non-boolean → default. `text` / `format`: non-string → default; longer than `maxLength` → cut to `maxLength`. `multiChoice`: drop unknown values and duplicates, cut to `max`, below `min` → default. `appList`: non-array → default. Unknown keys are **not** in the result. |
 | `diffFromDefaults(type, options): object` | Keeps keys whose value differs from the field default (by `deepEqual`) **and** every unknown key (preserved on save) |
 | `migrate(type, options): { options, warnings }` | `clock`: `format: s` → `{preset: "custom", customFormat: s}`; `showDate: false` (and no `preset`) → `{preset: "time"}`; `showDate: true` → removed. Then `diffFromDefaults`. Other types: `diffFromDefaults` only. |
 | `isFieldVisible(field, resolved: object): boolean` | No `visibleWhen` → true; `equals` → `===`; `notEquals` → `!==`; `includes` → array includes |
@@ -95,9 +104,9 @@ Values (label and description copied from `02-bar-widgets.md` §1.1; `overflowPr
 | `isVertical(bar): boolean` | position `left`/`right` |
 | `thicknessRange(position): [int, int]` | from `BAR_GUARDRAILS.thicknessPx`: horizontal `[28, 96]`, vertical `[44, 120]` |
 | `edgeGap(bar): int` / `endGap(bar): int` | horizontal bar: `marginVertical` / `marginHorizontal`; vertical bar: the reverse |
-| `normalizeBar(raw, index: int): { bar: Bar, warnings }` | Missing fields → defaults; `id` → `"bar" + (index + 1)`; `name` → `"Bar " + (index + 1)`; legacy `margin` → both margins when unset; invalid enum → default + warning; thickness clamped to `thicknessRange`; margins clamped `0..24`; `length` int clamped `10..100`, other strings → `"full"`; section entries that are strings become `{type, options: {}}`; unknown widget types are kept with a warning; each widget's options pass through `migrate` |
-| `defaultConfig(): Config` | fresh object (§3.1) with bars from the preset marked `default: true` |
-| `normalizeConfig(raw: any): { config: Config, warnings }` | Non-object or array → `defaultConfig()` + a warning; missing top-level keys → defaults; unknown top-level keys preserved; `bars` missing → default preset; `schemaVersion` set to `1` |
+| `normalizeBar(raw, index: int): { bar: Bar, warnings }` | Missing fields → defaults; `id` → `"bar" + (index + 1)`; `name` → `"Bar " + (index + 1)`; legacy `margin` → both margins when unset; invalid enum → default + warning; thickness clamped to `thicknessRange`; margins clamped `0..24`; `length` int clamped `10..100`, other strings → `"full"`; section entries that are strings become `{type, options: {}}`; unknown widget types are kept with a warning; each widget's options pass through `migrate`. A non-object `raw` is treated as `{}` with a warning; a present value of the wrong type (`enabled: "yes"`, `screens: 3`, a section that is not an array) → default + warning; unknown bar keys and section names are dropped with a warning; section entries without a string `type` are dropped with a warning. Missing values never warn |
+| `defaultConfig(): Config` | fresh object (§3.1) with bars from the preset marked `default: true` and `keybinds: {}` (an empty map means "use `keybinds.defaultBinds()`") |
+| `normalizeConfig(raw: any): { config: Config, warnings }` | Non-object or array → `defaultConfig()` + a warning; missing top-level keys → defaults; unknown top-level keys preserved; `bars` missing → default preset; `schemaVersion` set to `1`. `bars` present but not an array → default preset + warning. A section whose default is an object (`appearance`, `notifications`, …) but whose value is not → default + warning; missing keys inside such a section → their defaults (values inside sections are not type-checked here; the service that reads them does) |
 | `presetBars(name): Bar[]` | normalized copy of a preset; unknown name → `[]` |
 | `barAppliesToScreen(bar, screenName: string): boolean` | `screens === "all"` or list includes the name |
 | `placementProblems(bars, screenName, screen: {width, height}): string[]` | `"Only 2 bars fit on the <edge> edge"` when more than `maxBarsPerEdge` enabled bars on that screen share an edge; `"Bars may reserve at most 25% of the screen <height\|width>"` when reserved extents on one axis exceed `maxReservedSharePerAxis` |
@@ -148,7 +157,7 @@ Values (label and description copied from `02-bar-widgets.md` §1.1; `overflowPr
 ### 2.9 `popoverPlacement.mjs` (spec: `primitives/04` §1)
 | Export | Contract |
 |---|---|
-| `placePopover({ edge, origin: Rect, card: {width, height}, screen: {width, height}, insets, gap }): { x, y, originX, originY }` | Screen-local coordinates. `top`: `y = insets.top + gap`, `x` = origin centre − `width/2`, clamped to `[insets.left + gap, screen.width − insets.right − gap − width]`. `bottom`: `y = screen.height − insets.bottom − gap − height`, same `x`. `left`: `x = insets.left + gap`, `y` = origin centre − `height/2`, clamped vertically the same way. `right`: mirror of left. `none`: top-end corner `x = screen.width − insets.right − gap − width`, `y = insets.top + gap`. `originX/originY` = the origin centre projected onto the card edge that faces the bar, clamped to the card (the `Scale` transform origin). |
+| `placePopover({ edge, origin: Rect, card: {width, height}, screen: {width, height}, insets, gap }): { x, y, originX, originY }` | Screen-local coordinates. `top`: `y = insets.top + gap`, `x` = origin centre − `width/2`, clamped to `[insets.left + gap, screen.width − insets.right − gap − width]`. `bottom`: `y = screen.height − insets.bottom − gap − height`, same `x`. `left`: `x = insets.left + gap`, `y` = origin centre − `height/2`, clamped vertically the same way. `right`: mirror of left. `none`: top-end corner `x = screen.width − insets.right − gap − width`, `y = insets.top + gap`. `originX/originY` = the origin centre projected onto the card edge that faces the bar, clamped to the card (the `Scale` transform origin). `none` has no bar: `originX = width`, `originY = 0` (the card grows from its top-end corner). `x` and `y` are rounded to whole pixels so text stays sharp. |
 
 ### 2.10 `wheel.mjs` (spec: `foundations/04` §3)
 | Export | Contract |
@@ -159,27 +168,52 @@ Values (label and description copied from `02-bar-widgets.md` §1.1; `overflowPr
 | Export | Contract |
 |---|---|
 | `ACTIONS: Action[]` | `{ id, label, group, ipc: {target, fn, args: string[]}, defaultChords: string[], core: boolean, repeat: boolean }`, one per action id in `01-architecture.md` §7 (20 actions), in that order; `core: true` for `toggleLauncher`, `openSettings`, `togglePower`; `repeat: true` for `volumeUp`, `volumeDown`, `brightnessUp`, `brightnessDown` |
-| `normalizeChord(chord: string): string` | Modifiers first in the order `Ctrl, Alt, Shift, Super`; aliases `Control→Ctrl`, `Mod4/Win/Meta/Logo→Super`, `Esc→Escape`, `","→Comma`, `"."→Period`; single letters uppercase; other key names keep their case; parts joined with `+`; empty → `""` |
+| `normalizeChord(chord: string): string` | A part that is not a modifier, `,`, `.` or a key name of letters, digits and `_` makes the chord invalid → `""` (chord text reaches compositor config files, so nothing else may pass). Modifiers first in the order `Ctrl, Alt, Shift, Super`; aliases `Control→Ctrl`, `Mod4/Win/Meta/Logo→Super`, `Esc→Escape`, `","→Comma`, `"."→Period`; single letters uppercase; other key names keep their case; parts joined with `+`; empty → `""` |
 | `defaultBinds(): {[id]: string[]}` | normalized `defaultChords` per action |
 | `findConflict(binds, chord, exceptId): string \| null` | id of another action that has the same normalized chord |
 | `canUnbind(id): boolean` | `!core` |
-| `hyprBindLines(id, chord): string[]` | `"Super+Shift+S"` → `["bind = SUPER SHIFT, S, global, mat-shell:toggleCapture"]`; no modifiers (`"Print"`) → `["bind = , Print, global, mat-shell:<id>"]`; lone `"Super"` → `["bindr = SUPER, Super_L, global, mat-shell:<id>"]`; `repeat` actions use `binde`; key names map `Comma→comma`, `Period→period`, `Space→space`, everything else unchanged; modifiers map `Ctrl→CTRL`, `Alt→ALT`, `Shift→SHIFT`, `Super→SUPER` |
+| `hyprBindLines(id, chord): string[]` | empty chord, or a chord with no key other than lone `Super` → `[]`; `"Super+Shift+S"` → `["bind = SUPER SHIFT, S, global, mat-shell:toggleCapture"]`; no modifiers (`"Print"`) → `["bind = , Print, global, mat-shell:<id>"]`; lone `"Super"` → `["bindr = SUPER, Super_L, global, mat-shell:<id>"]`; `repeat` actions use `binde`; key names map `Comma→comma`, `Period→period`, `Space→space`, everything else unchanged; modifiers map `Ctrl→CTRL`, `Alt→ALT`, `Shift→SHIFT`, `Super→SUPER` and are written in the order `SUPER CTRL ALT SHIFT` (unlike `normalizeChord`'s order) |
 | `bindsConf(binds): string` | header `# Generated by mat-shell KeybindService — edits are overwritten` + lines in `ACTIONS` order + trailing newline |
-| `niriSnippet(binds) / swaySnippet(binds): string` | One line per chord, running `IPC_PREFIX` (`"qs -c mat-shell ipc call"`) + `ipc.target ipc.fn ipc.args…`. Niri: `Mod+A { spawn "qs" "-c" "mat-shell" "ipc" "call" "shell" "toggleControlCenter"; }` (modifiers `Super→Mod`, `Ctrl→Ctrl`, `Alt→Alt`, `Shift→Shift`). Sway: `bindsym Mod4+a exec qs -c mat-shell ipc call shell toggleControlCenter` (modifiers `Super→Mod4`, `Ctrl→Control`, `Alt→Mod1`; letters lowercase; `Comma→comma`, `Period→period`, `Space→space`) |
+| `niriSnippet(binds): string` / `swaySnippet(binds): string` | One line per chord, running `IPC_PREFIX` (`"qs -c mat-shell ipc call"`) + `ipc.target ipc.fn ipc.args…`. Niri: `Mod+A { spawn "qs" "-c" "mat-shell" "ipc" "call" "shell" "toggleControlCenter"; }` (modifiers `Super→Mod`, `Ctrl→Ctrl`, `Alt→Alt`, `Shift→Shift`). Sway: `bindsym Mod4+a exec qs -c mat-shell ipc call shell toggleControlCenter` (modifiers `Super→Mod4`, `Ctrl→Control`, `Alt→Mod1`; letters lowercase; `Comma→comma`, `Period→period`, `Space→space`). Both skip chords without a key (lone `Super`), write an empty argument as `""`, and end with `\n` (no lines → `""`). Everywhere in this module, a `binds` value that is not a list counts as `[]` and an invalid chord writes nothing |
+
+`ACTIONS` data (labels and groups from `16-settings.md` §3.3; chords from `01-architecture.md` §7.1–§7.2):
+
+| id | label | group | ipc (`target fn args`) |
+|---|---|---|---|
+| `toggleLauncher` | Open launcher | Launcher & Overview | `shell toggleLauncher` |
+| `launcherClipboard` | Clipboard history | Launcher & Overview | `shell openLauncherMode clip` |
+| `launcherEmoji` | Emoji picker | Launcher & Overview | `shell openLauncherMode emoji` |
+| `toggleOverview` | Workspace overview | Launcher & Overview | `shell toggleOverview` |
+| `toggleControlCenter` | Control center | Shell | `shell toggleControlCenter` |
+| `toggleNotifications` | Notification center | Shell | `shell toggleNotifications` |
+| `toggleCalendar` | Calendar & weather | Shell | `shell toggleCalendar` |
+| `toggleMedia` | Media player | Media & Volume | `shell toggleMedia` |
+| `togglePower` | Power menu | Session | `shell togglePower` |
+| `toggleCapture` | Screenshot & recording | Capture | `shell toggleCapture` |
+| `toggleThemeStudio` | Wallpaper & theme | Shell | `shell toggleThemeStudio` |
+| `toggleWidgetPeek` | Desktop widgets | Shell | `shell toggleWidgetPeek` |
+| `openSettings` | Settings | Shell | `shell openSettings ""` |
+| `focusBar` | Focus the bar | Shell | `shell focusBar` |
+| `lock` | Lock screen | Session | `shell lock` |
+| `volumeUp` | Volume up | Media & Volume | `osd changeVolume 5` |
+| `volumeDown` | Volume down | Media & Volume | `osd changeVolume -5` |
+| `toggleMute` | Mute | Media & Volume | `osd toggleMute` |
+| `brightnessUp` | Brightness up | Media & Volume | `osd changeBrightness 5` |
+| `brightnessDown` | Brightness down | Media & Volume | `osd changeBrightness -5` |
 
 ### 2.12 Domain helpers
 | Module | Export | Contract |
 |---|---|---|
-| `clockFormat.mjs` | `clockPattern(opt, systemTwelveHour: boolean): {pattern, timePattern, twelveHour, needsSeconds}` | Same rules as `02-bar-widgets.md` §8 `ClockWidget.qml`: `time` = `(12h ? "h:mm" : "HH:mm") + (showSeconds ? ":ss" : "") + (12h ? " AP" : "")`; presets `time`, `weekdayTime` = `"ddd  " + time`, `dateTime` = `"ddd d MMM  " + time`, `fullDate` = `"dddd d MMMM  " + time`, `custom` = `customFormat`. `needsSeconds` = `showSeconds` or an unquoted `s` in the pattern |
+| `clockFormat.mjs` | `clockPattern(opt, systemTwelveHour: boolean): {pattern, timePattern, twelveHour, needsSeconds}` | Same rules as `02-bar-widgets.md` §8 `ClockWidget.qml`: `time` = `(12h ? "h:mm" : "HH:mm") + (showSeconds ? ":ss" : "") + (12h ? " AP" : "")`; presets `time`, `weekdayTime` = `"ddd  " + time`, `dateTime` = `"ddd d MMM  " + time`, `fullDate` = `"dddd d MMMM  " + time`, `custom` = `customFormat`. `timePattern` = `time` (also under `custom`). `needsSeconds` = the final `pattern` has an unquoted `s`, so a hidden `showSeconds` under `custom` has no effect |
 | | `verticalPatterns(opt, twelveHour): string[]` | `[12h ? "h" : "HH", "mm"]` + `["ss"]` when `showSeconds` |
-| | `qtPatternError(pattern): string` | `""` when valid; else `"Enter a pattern"`, `"Close the quoted text with '"`, or `"Add at least one date or time code, e.g. HH:mm"` (same order as the showcase) |
+| | `qtPatternError(pattern): string` | `""` when valid; else `"Enter a pattern"`, `"Close the quoted text with '"`, or `"Add at least one date or time code, e.g. HH:mm"` (same order and rules as the showcase: an odd number of `'` is unclosed; codes, outside quotes, are `d dd ddd dddd M MM MMM MMMM yy yyyy h hh H HH m mm s ss AP ap`) |
 | `notifications.mjs` | `shouldToast(urgency: "low"\|"normal"\|"critical", dnd): boolean` | `!dnd \|\| urgency === "critical"` |
 | | `toastTimeoutMs(urgency, expireTimeoutMs: int): int` | critical → `0`; `expireTimeoutMs > 0` → it; low → `4000`; normal → `6000` |
 | | `sanitizeBody(markup: string): string` | keeps `<b> <i> <u> <br>` and `<a href="http(s)://…">`, drops every other tag and attribute, escapes `& < >` in text |
-| | `groupHistory(items: [{id, appName, time}]): [{appName, items}]` | groups by `appName`; groups and items newest first |
+| | `groupHistory(items: [{id, appName, time}]): [{appName, items}]` | groups by `appName`; items newest first (equal times keep input order); groups ordered by their newest item |
 | `launcherQuery.mjs` | `parseQuery(text: string): {mode, term}` | `"win "` → `win`; `"clip "` → `clip` (also exactly `"win"`/`"clip"`); leading `=` → `calc`; `>` → `cmd`; `:` → `emoji`; else `apps`; `term` trimmed |
-| | `fuzzyScore(term, text): number` | `0` no match; prefix match `300 − len`; word-start match `200 − len`; in-order subsequence `100 − gaps`; case-insensitive |
-| | `rankApps(term, apps: [{id, name, genericName, keywords: string[]}], usage: {[id]: int}, limit = 8): app[]` | best of `fuzzyScore` over the fields, ties by usage then name; empty term → by usage then name |
+| | `fuzzyScore(term, text): number` | `0` no match; prefix match `300 − len`; word-start match `200 − len`; in-order subsequence `100 − gaps`; case-insensitive. `len` = text length; a word starts after a space, `-`, `_` or `.`; `gaps` = characters skipped between the first and last matched character; a subsequence scores at least `1`; an empty term scores `0` |
+| | `rankApps(term, apps: [{id, name, genericName, keywords: string[]}], usage: {[id]: int}, limit = 8): app[]` | best of `fuzzyScore` over `name`, `genericName` and each keyword; apps scoring `0` are dropped; ties by usage (higher first), then name (A–Z, case-insensitive by code point), then input order; empty term → every app by usage then name; at most `limit` |
 | `telemetry.mjs` | `parseProcStat(text): {idle, total}` | from the first `cpu ` line: `idle = idle + iowait`, `total` = sum of fields |
 | | `cpuPercent(prev, cur): number` | `100 · (1 − Δidle/Δtotal)`, `0` when `Δtotal ≤ 0`, rounded to an int |
 | | `parseMeminfo(text): {totalKb, availableKb, usedPercent}` | `MemTotal`, `MemAvailable`; `usedPercent` rounded |
@@ -187,11 +221,19 @@ Values (label and description copied from `02-bar-widgets.md` §1.1; `overflowPr
 | | `logoutCommand(compositor: "hyprland"\|"niri"\|"other", user: string): string[]` | `["hyprctl", "dispatch", "exit"]`, `["niri", "msg", "action", "quit"]`, `["loginctl", "terminate-user", user]` |
 | | `parseInhibitorsJson(json: object): [{what, who, why, mode, uid, pid}]` | from `busctl --json=short call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager ListInhibitors` (`data[0]` is the list of `(what, who, why, mode, uid, pid)` tuples); malformed → `[]` |
 | | `blockingInhibitors(list): list` | `mode === "block"` and `what` contains `shutdown` or `sleep` |
-| `weather.mjs` | `parseWttr(json: object, fetchedAt: int): Weather \| null` | from wttr `j1`: `current_condition[0]` → `{tempC, feelsLikeC, code, description, humidity, windKph}` + `hourly` (next 6 three-hour slots of `weather[0..1].hourly`) + `fetchedAt`; malformed → `null` |
+| `weather.mjs` | `parseWttr(json: object, fetchedAt: int): Weather \| null` | from wttr `j1`: `current_condition[0]` → `{tempC, feelsLikeC, code, description, humidity, windKph}` + `hourly` + `fetchedAt`. `hourly`: the slots of `weather[0].hourly` then `weather[1].hourly` as `{day: 0\|1, hour: int(time) / 100, tempC, code}`, starting at the first day-0 slot whose hour ≥ `new Date(fetchedAt).getHours()`, at most 6; slots that are not objects are skipped. Numbers are parsed from wttr's strings. `current_condition[0]` missing or `temp_C` not numeric → `null` |
 | | `isStale(fetchedAt, now, maxAgeMs = 1800000): boolean` | `now − fetchedAt > maxAgeMs` |
 | | `weatherIcon(code: int, night: boolean): string` | `113` → `sunny`/`clear_night`; `116` → `partly_cloudy_day`/`partly_cloudy_night`; `119, 122` → `cloud`; `143, 248, 260` → `foggy`; `200, 386, 389, 392, 395` → `thunderstorm`; snow codes `179, 227, 230, 323–338, 368, 371` → `weather_snowy`; every other code → `rainy` |
-| `hyprParse.mjs` | `parseClients(json: array): Client[]` | `{ address, title, appId (class), workspaceId, monitor, floating, fullscreen, x, y, width, height }` from `hyprctl clients -j` |
-| | `windowsOverlap(clients, rect, workspaceId): boolean` | any non-floating client on the workspace intersects `rect` |
+| `hyprParse.mjs` | `parseClients(json: array): Client[]` | `{ address, title, appId (class), workspaceId, monitor, floating, fullscreen, x, y, width, height }` from `hyprctl clients -j`; `fullscreen` is a boolean (`!== 0`); `x, y` from `at`, `width, height` from `size`; non-object entries are skipped; non-array → `[]` |
+| | `windowsOverlap(clients, rect, workspaceId): boolean` | any non-floating client on the workspace intersects `rect` (shared edges do not count) |
+
+### 2.13 `paths.mjs` (spec: §1 "Paths"; `07-distribution.md` §2)
+Built by the design owner (install readiness, Phase J); `ConfigService` and `ThemeService` consume it.
+
+| Export | Contract |
+|---|---|
+| `userDirs(env: {HOME, XDG_CONFIG_HOME, XDG_CACHE_HOME}): {homeDir, configDir, cacheDir, warnings}` | A value counts only when it is a string starting with `/`; trailing slashes are dropped, so `HOME=/` gives `homeDir: ""`. Non-strings (`null`/`undefined` from `Quickshell.env`) and `""` are unset. `configDir` = (`XDG_CONFIG_HOME`, else `homeDir + "/.config"`) + `"/mat-shell"`; `cacheDir` likewise with `XDG_CACHE_HOME` / `"/.cache"`. Warnings: `"HOME is not set to an absolute path"` (then `homeDir` is `""`); `"<NAME> is not an absolute path; using <fallback>"` for a non-empty relative XDG value. Never throws (`env` may be `null`). |
+| `rebaseMatugenConfig(text: string, configDir: string): string` | Every `~/.config/mat-shell` in `text` becomes `configDir`, escaped for a TOML basic string (`\` → `\\`, `"` → `\"`, control characters → `\uXXXX`, upper-case hex); nothing else changes |
 
 ---
 
@@ -200,7 +242,7 @@ Values (label and description copied from `02-bar-widgets.md` §1.1; `overflowPr
 Every service is `pragma Singleton` + `Singleton { id: root }`, registered in `qmldir`. Properties marked **ro** are `readonly property`. A service starts no poller until a consumer calls its `sample()`/`refresh()` or binds a `*Active` flag (R07).
 
 ### 3.1 `ConfigService`
-Owns `~/.config/mat-shell/config.json` through `FileView { watchChanges: true; atomicWrites: true }`. Parses with `JSON.parse` and `barConfig.normalizeConfig`. It does not use `JsonAdapter`, because the bar tree is dynamic.
+Owns `configDir + "/config.json"` through `FileView { watchChanges: true; atomicWrites: true }`. Parses with `JSON.parse` and `barConfig.normalizeConfig`. It does not use `JsonAdapter`, because the bar tree is dynamic.
 
 `Config` (schema, `schemaVersion: 1`):
 
@@ -222,6 +264,7 @@ Owns `~/.config/mat-shell/config.json` through `FileView { watchChanges: true; a
 
 | Member | Contract |
 |---|---|
+| ro `homeDir: string`, ro `configDir: string`, ro `cacheDir: string` | from `paths.userDirs({ HOME: Quickshell.env("HOME"), XDG_CONFIG_HOME: Quickshell.env("XDG_CONFIG_HOME"), XDG_CACHE_HOME: Quickshell.env("XDG_CACHE_HOME") })`, read once at start; its warnings are logged. Every service builds its file paths from these three (§1 "Paths") |
 | ro `config: var` | the current normalized `Config` (replaced as a whole on every change, so bindings update) |
 | ro `error: string` | `""`, or `"config.json has an error on line N"` after an invalid external edit (the last good config stays active) |
 | ro `loaded: bool` | true after the first successful read or first-run write |
@@ -257,12 +300,12 @@ First run (file missing): write `defaultConfig()` with the dock's `apps.options.
 | `TelemetryService` | `cpuPercent: int`, `ramPercent: int`, `gpuPercent: int`, `temperatureC: int`, `diskPercent: var` (`{[mount]: int}`), `netDownBps: int`, `netUpBps: int`, `swapPercent: int` | `sample(metrics: var, diskMount: string)` | No internal timer: each visible consumer owns a `Timer` and calls `sample` (`interactions/03` §2.3) |
 | `KeyboardService` | `capsLock: bool`, `numLock: bool`, `layoutCode: string`, `layouts: var` (`[{code, name}]`), `layoutIndex: int` | `setLayout(index: int)`, `nextLayout()` | Hyprland `activelayout` events; caps lock from `/sys/class/leds/*::capslock/brightness` |
 | `AccessibilityService` | — | `setSwitch(name: string, value: string)`: `reducedMotion`, `reducedTransparency`, `highContrast`, `expressiveSprings`, `confirmByHold` (`"true"/"false"`), `textScale` (`"1"`, `"1.15"`, `"1.3"`) | Persists via `ConfigService`; `Tokens` switches bind to `ConfigService.config.accessibility.*` in `shell.qml` |
-| `ThemeService` | `currentWallpaper: string`, `wallpapers: var`, `busy: bool`, `lastError: string`, `canUndo: bool` | `applyWallpaper(path)`, `applyScheme(variant)`, `regenerate()`, `previewPalette(path, callback)`, `undoLastTheme()`, `regionLuma(rect): real`; signal `themeFailed(string stderr)` | The matugen command from `interactions/03` §2.4; backs up to `~/.cache/mat-shell/theme.prev.json` before applying |
-| `KeybindService` | `binds: var` (`{[id]: chords}`), `compositor: string` | `setChord(id, chord): string` (`""` on success, else the conflicting action id), `reset(id)`, `resetAll()`, `snippet(): string` | Writes `binds.conf` with `keybinds.bindsConf`, then `hyprctl reload`; on Niri/Sway only produces `snippet()` |
+| `ThemeService` | `currentWallpaper: string`, `wallpapers: var`, `busy: bool`, `lastError: string`, `canUndo: bool` | `applyWallpaper(path)`, `applyScheme(variant)`, `regenerate()`, `previewPalette(path, callback)`, `undoLastTheme()`, `regionLuma(rect): real`; signal `themeFailed(string stderr)` | The matugen command from `interactions/03` §2.4, with `-c configDir + "/matugen/config.toml"`; backs up to `cacheDir + "/theme.prev.json"` before applying. **Seeding** (at start, before any matugen run): when `configDir + "/matugen/config.toml"` is missing, write `rebaseMatugenConfig(<text of Quickshell.shellDir + "/assets/matugen/config.toml">, configDir)`; when `theme.json.tpl` is missing, copy it unchanged from the same folder. Create the folder first with `["mkdir", "-p", configDir + "/matugen"]`. Never overwrite an existing file (users edit them) |
+| `KeybindService` | `binds: var` (`{[id]: chords}`), `compositor: string` | `setChord(id, chord): string` (`""` on success, else the conflicting action id), `reset(id)`, `resetAll()`, `snippet(): string` | Writes `configDir + "/binds.conf"` with `keybinds.bindsConf`, then `hyprctl reload`; on Niri/Sway only produces `snippet()` |
 | `SessionService` | `inhibitors: var` (`blockingInhibitors(parseInhibitorsJson(…))`) | `run(actionId: "suspend"\|"hibernate"\|"logout"\|"reboot"\|"shutdown")`, `refreshInhibitors()` | Lock is not a session command: the power menu calls `ShellState.lockSession()` (services must not depend on State); `run("lock")` warns and does nothing |
-| `CaptureService` | `recording: bool`, `recordingSinceMs: int`, `lastFile: string` | `screenshot(rect)`, `screenshotScreen(screen)`, `startRecording(rect, withAudio: bool)`, `stopRecording()` | `grim`/`slurp`/`wf-recorder` command lines from `13-screen-capture-and-recording.md` §7; stop = `SIGINT` |
+| `CaptureService` | `recording: bool`, `recordingSinceMs: int`, `lastFile: string` | `screenshot(rect)`, `screenshotScreen(screen)`, `startRecording(rect, withAudio: bool)`, `stopRecording()` | `grim`/`slurp`/`wf-recorder` command lines from `13-screen-capture-and-recording.md` §7; stop = `SIGINT`; output folders `homeDir + "/Pictures/Screenshots"` and `homeDir + "/Videos/Recordings"`, created with `["mkdir", "-p", dir]` |
 | `PolkitService` | `pending: bool`, `actionId`, `message`, `iconName`, `details: var`, `identities: var`, `attemptsLeft: int` (3), `verifying: bool`, `error: string` | `authenticate(password: string)`, `cancel()`; signal `requested()`, `finished(bool success)` | Wraps `PolkitAgent` from `Quickshell.Services.Polkit` (Quickshell ≥ 0.3.0); passwords go only to the agent's response call, never to a command line or log |
-| `WeatherService` | `weather: var` (`Weather` or null), `stale: bool`, `loading: bool`, `error: string` | `refresh()` | `curl -s "wttr.in/?format=j1"`, cache in `~/.cache/mat-shell/weather.json`, refresh at most every 30 min while a consumer is visible |
+| `WeatherService` | `weather: var` (`Weather` or null), `stale: bool`, `loading: bool`, `error: string` | `refresh()` | `curl -s "wttr.in/?format=j1"`, cache in `cacheDir + "/weather.json"`, refresh at most every 30 min while a consumer is visible |
 | `LauncherService` | `apps: var` (from `DesktopEntries`), `usage: var` | `query(text: string): var` (`{mode, rows}`), `activate(row)`, `calc(expr, callback)` (`qalc -t`), `clipboard(callback)` (`cliphist list`), `pasteClip(id)`, `pin(appId)` | Rows are ranked with `launcherQuery.rankApps`; `pin` writes the first `apps` widget's `pinned` through `ConfigService` |
 | `SettingsIndex` | `categories: var` (`[{key, label, icon}]`, the nine page keys in `16-settings.md` order) | `indexOf(key)`, `pageFile(key)` → `<Pascal>Page.qml`, `search(text)` → `[{label, page, anchorId}]` | Static data; also feeds the launcher's `settings` rows |
 
@@ -278,7 +321,7 @@ Properties, functions, and IPC exactly as `interactions/01` §3 (names copied in
 | ro `widgetPeekActive`, ro `securityModalActive` | derived |
 | ro `dndEnabled` | `NotificationService.dndEnabled` (C06); write with `NotificationService.setDnd()` |
 | `popoverOriginRect: rect`, `popoverOriginEdge: string`, `popoverTrigger: Item` | set by `togglePopover` from the trigger item (`barEdge`, `mapToGlobal`) |
-| `registerTrigger(name, item)`, `unregisterTrigger(name, item)`, `resolveTrigger(name)` | as spec; `resolveTrigger` prefers the first item on `CompositorService.focusedScreen` |
+| `registerTrigger(name, item)`, `unregisterTrigger(name, item)`, `resolveTrigger(name)` | as spec; `resolveTrigger` prefers the first item on `CompositorService.focusedScreen`. The spec's `triggerItems` map is private: name it `_triggerItems` |
 | `togglePopover(name, triggerItem)`, `closeActivePopover()`, `toggleModal(name)`, `openModal(name)`, `closeActiveModal()`, `openLauncherMode(mode)`, `lockSession()`, `unlockSession()`, `openSettings(page)`, `focusBar()`, `handleEscape(inlineDepth: int): string` | each calls the reducer; `handleEscape` returns the reducer's `consumed` value; `lockSession` calls `PolkitService.cancel()` first when polkit is pending |
 | signal `settingsRequested(string page)` | emitted by `openSettings` when the reducer says `emit` |
 | `IpcHandler { target: "shell" }`, `IpcHandler { target: "mode" }` | functions in `01-architecture.md` §7 |

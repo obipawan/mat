@@ -1,0 +1,44 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { placePopover } from "../../shell/lib/popoverPlacement.mjs";
+
+const base = { origin: { x: 1700, y: 4, width: 100, height: 32 }, card: { width: 400, height: 300 },
+  screen: { width: 1920, height: 1080 }, insets: { top: 48, right: 0, bottom: 0, left: 0 }, gap: 8 };
+
+test("placePopover: top edge centres on the origin, clamps to the screen, and grows from the pill", () => {
+  assert.deepEqual(placePopover({ ...base, edge: "top" }), { x: 1512, y: 56, originX: 238, originY: 0 });
+});
+
+test("placePopover: bottom and left edges sit gap away from the bar", () => {
+  assert.equal(placePopover({ ...base, edge: "bottom", insets: { top: 0, right: 0, bottom: 64, left: 0 } }).y, 708);
+  assert.equal(placePopover({ ...base, edge: "left", insets: { top: 0, right: 0, bottom: 0, left: 56 }, origin: { x: 4, y: 500, width: 48, height: 48 } }).x, 64);
+});
+
+test("placePopover: no bar → top-end corner", () => {
+  assert.deepEqual(placePopover({ ...base, edge: "none" }).x, 1512);
+});
+
+// Contract details beyond the card (02-contracts.md §2.9)
+
+test("placePopover: no bar → grows from the card's top-end corner", () => {
+  const p = placePopover({ ...base, edge: "none" });
+  assert.deepEqual(p, { x: 1512, y: 56, originX: 400, originY: 0 });
+});
+
+test("placePopover: left and right edges centre vertically and face the bar", () => {
+  const left = placePopover({ ...base, edge: "left", insets: { top: 0, right: 0, bottom: 0, left: 56 }, origin: { x: 4, y: 500, width: 48, height: 48 } });
+  assert.deepEqual(left, { x: 64, y: 374, originX: 0, originY: 150 });
+  const right = placePopover({ ...base, edge: "right", insets: { top: 0, right: 56, bottom: 0, left: 0 }, origin: { x: 1868, y: 10, width: 48, height: 48 } });
+  assert.deepEqual(right, { x: 1456, y: 8, originX: 400, originY: 26 });
+});
+
+test("placePopover: bottom edge grows from the card's bottom edge", () => {
+  const p = placePopover({ ...base, edge: "bottom", insets: { top: 0, right: 0, bottom: 64, left: 0 }, origin: { x: 900, y: 1020, width: 100, height: 48 } });
+  assert.deepEqual(p, { x: 750, y: 708, originX: 200, originY: 300 });
+});
+
+// Checkpoint 10 review fixes
+
+test("placePopover: x and y are whole pixels", () => {
+  assert.equal(placePopover({ ...base, edge: "top", origin: { x: 1000, y: 4, width: 101, height: 32 } }).x, 851);
+});

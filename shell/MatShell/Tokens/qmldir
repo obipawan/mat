@@ -1,0 +1,7 @@
+module MatShell.Tokens
+singleton Tokens 1.0 Tokens.qml
+singleton ColorTokens 1.0 ColorTokens.qml
+singleton MotionTokens 1.0 MotionTokens.qml
+singleton ShapeTokens 1.0 ShapeTokens.qml
+singleton TypographyTokens 1.0 TypographyTokens.qml
+singleton MetricTokens 1.0 MetricTokens.qml

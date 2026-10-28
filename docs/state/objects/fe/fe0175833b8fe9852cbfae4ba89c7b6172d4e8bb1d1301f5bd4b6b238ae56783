@@ -1,0 +1,237 @@
+// Bar and config normalization, presets, and placement rules (docs/lld/02-contracts.md §2.5; spec 01-bar-system.md §1.1, §2.1).
+import { clamp, clone } from "./util.mjs";
+import { migrate } from "./widgetOptions.mjs";
+import { BAR_PRESETS, BAR_GUARDRAILS, WIDGET_TYPES } from "./generated/barPresets.mjs";
+
+const POSITIONS = ["top", "right", "bottom", "left"];
+const MODES = ["bar", "island"];
+const ALIGNMENTS = ["start", "center", "end"];
+const VISIBILITIES = ["always", "autohide", "dodge", "auto"];
+const SECTIONS = ["start", "center", "end"];
+
+export const BAR_DEFAULTS = {
+  name: "Bar", enabled: true, screens: "all", position: "top", mode: "bar", thickness: 40, length: "full",
+  alignment: "center", marginHorizontal: 8, marginVertical: 8, visibility: "always", reserveSpace: true,
+  sections: { start: [], center: [], end: [] },
+};
+
+export const FIRST_RUN_PIN_GROUPS = [
+  ["firefox.desktop", "org.mozilla.firefox.desktop", "chromium.desktop"],
+  ["org.gnome.Nautilus.desktop", "thunar.desktop", "org.kde.dolphin.desktop"],
+  ["org.wezfurlong.wezterm.desktop", "kitty.desktop", "foot.desktop", "Alacritty.desktop"],
+];
+
+// Config schema (§3.1); bars are added by defaultConfig().
+const CONFIG_DEFAULTS = {
+  schemaVersion: 1,
+  appearance: { darkMode: true, surfaceMode: "frosted_tonal_glass", desktopMode: "tiling", densityMode: "comfortable",
+                schemeVariant: "scheme-tonal-spot", themedIcons: true, widgetScale: 1.0 },
+  theme: { wallpaper: "" },
+  widgets: { enabled: true },
+  notifications: { dnd: false, toastCorner: "top-right" },
+  keybinds: {},
+  animations: { expressiveSprings: true },
+  accessibility: { reducedMotion: false, reducedTransparency: false, highContrast: false, textScale: 1.0, confirmByHold: true },
+  ui: { lastSettingsPage: "appearance" },
+};
+
+function isObject(v) {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function own(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+// User keys are written as own data properties: `obj[key] = v` would treat "__proto__" as the prototype.
+function setOwn(obj, key, value) {
+  Object.defineProperty(obj, key, { value, writable: true, enumerable: true, configurable: true });
+}
+
+function mergeOwn(base, extra) {
+  for (const k of Object.keys(extra)) setOwn(base, k, extra[k]);
+  return base;
+}
+
+export function isVertical(bar) {
+  return bar.position === "left" || bar.position === "right";
+}
+
+export function thicknessRange(position) {
+  const px = BAR_GUARDRAILS.thicknessPx;
+  return (position === "left" || position === "right" ? px.vertical : px.horizontal).slice();
+}
+
+export function edgeGap(bar) {
+  return isVertical(bar) ? bar.marginHorizontal : bar.marginVertical;
+}
+
+export function endGap(bar) {
+  return isVertical(bar) ? bar.marginVertical : bar.marginHorizontal;
+}
+
+function normalizeWidget(entry, where, warnings) {
+  let type, options;
+  if (typeof entry === "string") {
+    type = entry;
+    options = {};
+  } else if (isObject(entry) && typeof entry.type === "string") {
+    type = entry.type;
+    const m = migrate(type, entry.options);
+    options = m.options;
+    m.warnings.forEach((w) => warnings.push(where + ": " + w));
+  } else {
+    warnings.push(where + ": dropped a widget entry without a type");
+    return null;
+  }
+  if (!WIDGET_TYPES.includes(type)) warnings.push(where + ": unknown widget type \"" + type + "\" (kept)");
+  return { type, options };
+}
+
+export function normalizeBar(raw, index) {
+  const warnings = [];
+  const id0 = "bar" + (index + 1);
+  if (!isObject(raw)) {
+    warnings.push(id0 + ": a bar must be an object; using the defaults");
+    raw = {};
+  }
+  const has = (k) => own(raw, k) && raw[k] !== undefined;
+  const id = typeof raw.id === "string" && raw.id ? raw.id : id0;
+  const wrong = (k, fallback) => {
+    warnings.push(id + ": " + k + " " + JSON.stringify(raw[k]) + " is not valid; using " + JSON.stringify(fallback));
+    return fallback;
+  };
+  const pick = (k, ok, fallback) => (!has(k) ? fallback : ok(raw[k]) ? raw[k] : wrong(k, fallback));
+  const oneOf = (list) => (v) => list.includes(v);
+  const isNumber = (v) => typeof v === "number" && isFinite(v);
+
+  const bar = {
+    id,
+    name: pick("name", (v) => typeof v === "string" && v !== "", "Bar " + (index + 1)),
+    enabled: pick("enabled", (v) => typeof v === "boolean", BAR_DEFAULTS.enabled),
+    screens: pick("screens", (v) => v === "all" || (Array.isArray(v) && v.every((s) => typeof s === "string")), "all"),
+    position: pick("position", oneOf(POSITIONS), BAR_DEFAULTS.position),
+    mode: pick("mode", oneOf(MODES), BAR_DEFAULTS.mode),
+    alignment: pick("alignment", oneOf(ALIGNMENTS), BAR_DEFAULTS.alignment),
+    visibility: pick("visibility", oneOf(VISIBILITIES), BAR_DEFAULTS.visibility),
+    reserveSpace: pick("reserveSpace", (v) => typeof v === "boolean", BAR_DEFAULTS.reserveSpace),
+  };
+  if (Array.isArray(bar.screens)) bar.screens = bar.screens.slice();
+  if (has("id") && bar.id === id0 && raw.id !== id0) wrong("id", id0);
+
+  const [lo, hi] = thicknessRange(bar.position);
+  bar.thickness = clamp(Math.round(pick("thickness", isNumber, BAR_DEFAULTS.thickness)), lo, hi);
+
+  const length = pick("length", (v) => v === "full" || v === "fit" || isNumber(v), BAR_DEFAULTS.length);
+  bar.length = isNumber(length) ? clamp(Math.round(length), 10, 100) : length;
+
+  const legacy = has("margin") && isNumber(raw.margin) ? raw.margin : null;
+  if (has("margin") && legacy === null) warnings.push(id + ": margin " + JSON.stringify(raw.margin) + " is not a number; ignored");
+  for (const k of ["marginHorizontal", "marginVertical"]) {
+    const fallback = legacy !== null ? legacy : BAR_DEFAULTS[k];
+    bar[k] = clamp(Math.round(pick(k, isNumber, fallback)), 0, 24);
+  }
+
+  bar.sections = { start: [], center: [], end: [] };
+  if (has("sections") && !isObject(raw.sections)) {
+    wrong("sections", bar.sections);
+  } else if (has("sections")) {
+    for (const key of Object.keys(raw.sections)) {
+      const list = raw.sections[key];
+      if (!SECTIONS.includes(key)) {
+        warnings.push(id + ": unknown section \"" + key + "\" dropped");
+      } else if (!Array.isArray(list)) {
+        warnings.push(id + ": section " + key + " must be a list; using []");
+      } else {
+        bar.sections[key] = list.map((e) => normalizeWidget(e, id + "." + key, warnings)).filter((w) => w !== null);
+      }
+    }
+  }
+
+  const known = ["id", "margin", "sections", "thickness", "length", "marginHorizontal", "marginVertical"].concat(Object.keys(bar));
+  for (const k of Object.keys(raw)) {
+    if (!known.includes(k)) warnings.push(id + ": unknown setting \"" + k + "\" dropped");
+  }
+  return { bar, warnings };
+}
+
+export function presetBars(name) {
+  const preset = own(BAR_PRESETS, name) ? BAR_PRESETS[name] : null;
+  return preset ? preset.bars.map((b, i) => normalizeBar(b, i).bar) : [];
+}
+
+function defaultPresetName() {
+  return Object.keys(BAR_PRESETS).find((k) => BAR_PRESETS[k].default) || Object.keys(BAR_PRESETS)[0];
+}
+
+export function defaultConfig() {
+  const config = clone(CONFIG_DEFAULTS);
+  config.bars = presetBars(defaultPresetName());
+  return config;
+}
+
+export function normalizeConfig(raw) {
+  if (!isObject(raw)) return { config: defaultConfig(), warnings: ["config.json must hold a JSON object; using the defaults"] };
+  const warnings = [];
+  const config = {};
+  for (const k of Object.keys(raw)) {
+    if (!own(CONFIG_DEFAULTS, k) && k !== "bars") setOwn(config, k, clone(raw[k]));
+  }
+  for (const k of Object.keys(CONFIG_DEFAULTS)) {
+    const def = CONFIG_DEFAULTS[k];
+    if (!isObject(def) || !own(raw, k)) {
+      config[k] = clone(def);
+    } else if (isObject(raw[k])) {
+      config[k] = mergeOwn(clone(def), clone(raw[k]));
+    } else {
+      warnings.push(k + " must be an object; using the defaults");
+      config[k] = clone(def);
+    }
+  }
+  config.schemaVersion = 1;
+  if (Array.isArray(raw.bars)) {
+    config.bars = raw.bars.map((b, i) => {
+      const r = normalizeBar(b, i);
+      r.warnings.forEach((w) => warnings.push(w));
+      return r.bar;
+    });
+  } else {
+    if (own(raw, "bars")) warnings.push("bars must be a list; using the default preset");
+    config.bars = presetBars(defaultPresetName());
+  }
+  return { config, warnings };
+}
+
+export function barAppliesToScreen(bar, screenName) {
+  return bar.screens === "all" || (Array.isArray(bar.screens) && bar.screens.includes(screenName));
+}
+
+export function placementProblems(bars, screenName, screen) {
+  const active = bars.filter((b) => b.enabled && barAppliesToScreen(b, screenName));
+  const problems = [];
+  for (const edge of POSITIONS) {
+    if (active.filter((b) => b.position === edge).length > BAR_GUARDRAILS.maxBarsPerEdge) {
+      problems.push("Only " + BAR_GUARDRAILS.maxBarsPerEdge + " bars fit on the " + edge + " edge");
+    }
+  }
+  const share = BAR_GUARDRAILS.maxReservedSharePerAxis;
+  const reserved = (edges) => active
+    .filter((b) => edges.includes(b.position) && b.reserveSpace && b.visibility !== "autohide")
+    .reduce((sum, b) => sum + b.thickness + edgeGap(b), 0);
+  if (reserved(["top", "bottom"]) > share * screen.height) {
+    problems.push("Bars may reserve at most " + Math.round(share * 100) + "% of the screen height");
+  }
+  if (reserved(["left", "right"]) > share * screen.width) {
+    problems.push("Bars may reserve at most " + Math.round(share * 100) + "% of the screen width");
+  }
+  return problems;
+}
+
+export function firstRunPinned(groups, exists) {
+  const out = [];
+  for (const group of groups) {
+    const hit = group.find((id) => exists(id));
+    if (hit) out.push(hit);
+  }
+  return out;
+}

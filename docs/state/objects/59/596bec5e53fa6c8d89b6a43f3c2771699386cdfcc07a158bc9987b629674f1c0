@@ -1,0 +1,84 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { BAR_DEFAULTS } from "../../shell/lib/barConfig.mjs";
+import {
+  effectiveVisibility, isShown, extent, exclusiveZone, stackOffsets, insets, maxInsets, lengthPx, alignOffset, regions,
+} from "../../shell/lib/barGeometry.mjs";
+
+const B = (o) => ({ ...BAR_DEFAULTS, id: "a", ...o });
+const ctx = (o) => ({ desktopMode: "tiling", revealed: false, windowsOverlap: false, barFocusActive: false, settingsPreview: false, ...o });
+
+test("effectiveVisibility: auto → dodge when tiling, always when floating", () => {
+  assert.equal(effectiveVisibility(B({ visibility: "auto" }), "tiling"), "dodge");
+  assert.equal(effectiveVisibility(B({ visibility: "auto" }), "floating"), "always");
+});
+
+test("isShown: dodge hides under windows unless bar focus; autohide shows when revealed", () => {
+  assert.equal(isShown(B({ visibility: "dodge" }), ctx({ windowsOverlap: true })), false);
+  assert.equal(isShown(B({ visibility: "dodge" }), ctx({ windowsOverlap: true, barFocusActive: true })), true);
+  assert.equal(isShown(B({ visibility: "autohide" }), ctx({ revealed: true })), true);
+});
+
+test("exclusiveZone: extent only for shown, reserving, non-autohide bars", () => {
+  assert.equal(exclusiveZone(B({}), true, "tiling"), 48);
+  assert.equal(exclusiveZone(B({ visibility: "autohide" }), true, "tiling"), 0);
+  assert.equal(exclusiveZone(B({ reserveSpace: false }), true, "tiling"), 0);
+  assert.equal(exclusiveZone(B({}), false, "tiling"), 0);
+});
+
+test("stackOffsets and insets: shown bars stack per edge in config order", () => {
+  const a = B({ id: "a" }), b = B({ id: "b", thickness: 32 });
+  assert.deepEqual(stackOffsets([a, b], ["a", "b"]), { a: 0, b: 48 });
+  assert.deepEqual(stackOffsets([a, b], ["b"]), { a: 0, b: 0 });
+  assert.deepEqual(insets([a, b], ["a", "b"]), { top: 88, right: 0, bottom: 0, left: 0 });
+  assert.deepEqual(insets([], []), { top: 0, right: 0, bottom: 0, left: 0 });
+});
+
+test("maxInsets: every enabled bar counts as shown", () => {
+  assert.deepEqual(maxInsets([B({ visibility: "autohide" })]), { top: 48, right: 0, bottom: 0, left: 0 });
+});
+
+test("lengthPx: full, fit, percent", () => {
+  assert.equal(lengthPx(B({}), 1920, 600), 1904);
+  assert.equal(lengthPx(B({ length: "fit" }), 1920, 600), 600);
+  assert.equal(lengthPx(B({ length: "fit" }), 1920, 5000), 1904);
+  assert.equal(lengthPx(B({ length: 50 }), 1920, 0), 960);
+});
+
+test("alignOffset: center, end, start", () => {
+  assert.equal(alignOffset(B({ length: "fit", alignment: "center" }), 1920, 600), 660);
+  assert.equal(alignOffset(B({ length: "fit", alignment: "end" }), 1920, 600), 1312);
+  assert.equal(alignOffset(B({ length: "fit", alignment: "start" }), 1920, 600), 8);
+});
+
+test("regions: eight slots; a top bar fills slot 0; a left bar fills slot 6", () => {
+  const a = B({ id: "a" });
+  const r = regions([a], ["a"], { width: 1920, height: 1080 }, { a: 1904 });
+  assert.equal(r.length, 8);
+  assert.deepEqual(r[0], { x: 8, y: 0, width: 1904, height: 48 });
+  assert.deepEqual(r[1], { x: 0, y: 0, width: 0, height: 0 });
+  const l = B({ id: "l", position: "left", thickness: 56 });
+  assert.deepEqual(regions([l], ["l"], { width: 1920, height: 1080 }, { l: 1064 })[6], { x: 0, y: 8, width: 64, height: 1064 });
+});
+
+// Contract details beyond the card (02-contracts.md §2.6)
+
+test("regions: a second stacked bar reaches from the screen edge to its own inner edge; bottom and right mirror", () => {
+  const a = B({ id: "a" }), b = B({ id: "b", thickness: 32 });
+  const r = regions([a, b], ["a", "b"], { width: 1920, height: 1080 }, { a: 1904, b: 1904 });
+  assert.deepEqual(r[1], { x: 8, y: 0, width: 1904, height: 88 });
+  const d = B({ id: "d", position: "bottom" }), e = B({ id: "e", position: "right" });
+  const q = regions([d, e], ["d", "e"], { width: 1920, height: 1080 }, { d: 1904, e: 1064 });
+  assert.deepEqual(q[4], { x: 8, y: 1032, width: 1904, height: 48 });
+  assert.deepEqual(q[2], { x: 1872, y: 8, width: 48, height: 1064 });
+});
+
+test("regions: a hidden bar leaves its slot empty; extent adds the edge gap", () => {
+  const a = B({ id: "a" });
+  assert.deepEqual(regions([a], [], { width: 1920, height: 1080 }, { a: 1904 })[0], { x: 0, y: 0, width: 0, height: 0 });
+  assert.equal(extent(B({ thickness: 40, marginVertical: 0 })), 40);
+});
+
+test("maxInsets: disabled bars do not count", () => {
+  assert.deepEqual(maxInsets([B({ enabled: false })]), { top: 0, right: 0, bottom: 0, left: 0 });
+});

@@ -9,7 +9,7 @@ LOG="$(mktemp -t mat-shell-smoke.XXXXXX)"
 QS=(qs -c mat-shell)
 
 "${QS[@]}" kill >/dev/null 2>&1 || true
-"$REPO/scripts/run-shell.sh" >"$LOG" 2>&1 &
+bash "$REPO/scripts/run-shell.sh" >"$LOG" 2>&1 &
 SHELL_PID=$!
 trap '"${QS[@]}" kill >/dev/null 2>&1 || kill "$SHELL_PID" 2>/dev/null || true' EXIT
 

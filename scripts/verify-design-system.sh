@@ -298,11 +298,22 @@ if errors:
     sys.exit(1)
 print(f"  ✓ {len(schemas)} customisable widgets declare {sum(map(len, schemas.values()))} valid option fields")
 PY
-# Implementation guardrails (docs/lld/03-guardrails.md): the linter proves its own rules, then lints shell/ when it exists
+# Implementation guardrails (docs/lld/03-guardrails.md): contracts, cross-references, locked tests, lint, unit tests
+python3 scripts/gen-contracts.py --check
+if [ -d docs/state ]; then
+  python3 scripts/matstate.py verify
+fi
+python3 scripts/check-refs.py
+python3 scripts/test-lock.py --check
+python3 scripts/check-deps.py --validate
+if [ -d shell ]; then
+  python3 scripts/gen-shell-data.py --check
+fi
 python3 scripts/lint-shell.py --self-test
 python3 scripts/lint-shell.py
 if [ -d tests/lib ]; then
-  node --test tests/lib/
+  node --test --test-reporter=dot "tests/lib/*.test.mjs"
+  echo "  ✓ unit tests pass (tests/lib)"
 fi
 echo "  ✓ Accessibility modes, input safety, polygon catalog, configurable bars, and shell-state protections are in place"
 

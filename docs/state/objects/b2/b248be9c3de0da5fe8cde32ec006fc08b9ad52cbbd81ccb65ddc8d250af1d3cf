@@ -1,0 +1,93 @@
+# AGENTS.md — Material 3 Expressive Desktop Environment for Quickshell
+
+> **Start here if you are writing code under `shell/`.** Run `python3 scripts/next-task.py` and do exactly what it prints, one task at a time. `python3 scripts/task-gate.py N` is the only way to finish a task: it seals the work in `docs/state/` (no git is used; never seal, revert or edit `docs/state/` yourself). Before any Quickshell/Qt API not in `docs/lld/03-guardrails.md` §5, run `python3 scripts/qs-api.py <Type> <member>`; "not found" means do not use it. If you are stuck, run `python3 scripts/task-gate.py N --stuck "<question>"` and stop. When `next-task.py` exits with 2 or 3, stop and show the human what it printed. Full rules: `docs/lld/06-unattended-runbook.md`. The end goal (a one-command install on Arch, including from a minimal install with no desktop) is in `docs/OBJECTIVE.md`; its packaging design, `docs/lld/07-distribution.md`, is not yet normative, so do not act on it during plan tasks.
+
+> **Primary Directive for AI Coding Agents**: This repository is the authoritative Design System, Interaction Architecture, and QML Blueprint for building a complete Linux/Wayland Desktop Environment from scratch using **Quickshell** (Qt6 / QtQuick / QML) and **Material Design 3 (M3 Expressive)**.
+
+---
+
+## 1. Strict Context & Directory Isolation Protocol
+
+To prevent context contamination between **Target Quickshell QML Specifications** and **Human Visual Showcase Artifacts**, obey these boundaries:
+
+| Path | Consumer | Role | Agent Rule |
+|---|---|---|---|
+| `design-system/tokens/qml/*.qml` | Quickshell Runtime & AI Agents | Ground-truth `pragma Singleton` QML token modules (`Tokens`, `ColorTokens`, `MotionTokens`, `ShapeTokens`, `TypographyTokens`, `MetricTokens`) | **MUST** be imported and referenced verbatim by every QML component (`Tokens.color.*`, `Tokens.motion.*`, `Tokens.shape.*`, `Tokens.typography.*`, `Tokens.metrics.*`). Never hardcode hex values, pixel sizes, or easing curves in component QML. |
+| `design-system/tokens/m3-tokens.json` | Tooling, `matugen`, & AI Agents | W3C machine-readable token source of truth (57 colour roles, matugen-generated seed palettes, surface tiers, springs, type scales) | Use to verify exact token values or generate theme files. |
+| `design-system/tokens/matugen/` | `matugen` ≥ 4.0 & AI Agents | `config.toml` + `theme.json.tpl` (both polarities) + `theme.baseline.json`; installs to `~/.config/mat-shell/matugen/` | Never hand-edit role lists in one place only — template, baseline, and `ColorTokens` adapter must stay key-identical (checked by `scripts/verify-design-system.sh`). Integration contract: `foundations/01-color-and-surfaces.md` §1.3. |
+| `design-system/foundations/*.md` | AI Agents | Desktop M3 rules: Dual-Surface Engine (`opaque_tonal` vs. `frosted_tonal_glass`), Expressive springs, shape morphing, state layers, Wayland `WlrLayershell` Z-order, and Adaptive Dual-Mode (`tiling` vs. `floating`) | Read the relevant foundation doc before implementing any primitive or shell surface. |
+| `design-system/primitives/*.md` | AI Agents | Reusable atomic M3 QML widgets (`M3Surface`, `M3Button`, `M3BarPill`, `M3Switch`, `M3Slider`, `M3Popover`, etc.) | Implement primitives **before** building shell surfaces. Shell surfaces compose primitives rather than re-implementing raw `Rectangle` + `MouseArea` state logic. |
+| `design-system/shell-components/*.md` | AI Agents | 16 self-contained desktop surface specs (Configurable Bar System, Bar Widget Catalog, Control Center, Notifications, Calendar, Media, OSDs, Launcher, Overview, Lock Screen, Power Menu, Polkit, Screen Capture, Wallpaper/Widget Studio, Desktop Wallpaper Widgets, and the two-pane Settings app) | Load **only** the spec file for the surface you are currently implementing to keep context focused. |
+| `design-system/interactions/*.md` | AI Agents | Cross-surface choreography, mutual exclusion, keyboard navigation submaps, and Quickshell service bindings (`Pipewire`, `UPower`, `Mpris`, `SystemTray`, `Hyprland`/`Niri`) | Load when wiring `shell.qml` root state, IPC, or panel transitions. |
+| `docs/lld/*.md` + `docs/superpowers/plans/2026-10-27-mat-shell-implementation-plan.md` | AI Agents writing shell code | Low-level design: source tree, contracts, guardrails (G/R/C rules), tests, and the 34-task build plan | **Required before generating any code under `shell/`.** Start at `docs/lld/README.md`; its precedence rule overrides spec §8 skeletons. Enforced by `scripts/verify-design-system.sh` (contract manifest, cross-references, locked tests, `scripts/lint-shell.py` G01–G21, unit tests) and, per task, `scripts/check-scope.py --task N`. |
+| `showcase/` & `*.canvas.tsx` | Human Designers & Reviewers | Interactive visual playground & token inspector in HTML/React/Canvas | **DO NOT** copy HTML/CSS/React idioms into Quickshell QML code. Use QtQuick layouts (`RowLayout`, `ColumnLayout`, `GridLayout`, `Anchors`), `HoverHandler`/`TapHandler`, and `SpringAnimation`/`NumberAnimation`. |
+
+---
+
+## 2. Progressive-Disclosure Context Loading Protocol
+
+When tasked with building or modifying any part of the Quickshell Desktop Environment, load files in this exact order:
+
+1. **Always Load First (Global Contract)**:
+   - `design-system/INDEX.md`
+   - `design-system/tokens/qml/Tokens.qml`
+2. **When Building Base UI / Primitives**:
+   - `design-system/foundations/01-color-and-surfaces.md`
+   - `design-system/foundations/03-motion-and-morphing.md`
+   - `design-system/foundations/04-interaction-states-and-input.md`
+   - The target file in `design-system/primitives/01..04-*.md`
+3. **When Building a Specific Shell Surface (e.g., the Bar System or Control Center)**:
+   - `design-system/foundations/05-wayland-layershell-spatial.md`
+   - `design-system/foundations/06-adaptive-desktop-modes.md`
+   - The single target file in `design-system/shell-components/01..15-*.md`
+   - `design-system/interactions/01-choreography-and-morphing.md`
+   - `design-system/interactions/03-quickshell-service-architecture.md`
+
+---
+
+## 3. Mandatory Architectural Invariants (Non-Negotiable Rules)
+
+1. **Zero Hardcoded Visual Constants**:
+   - Every color MUST bind to `Tokens.color.<role>` or `Tokens.color.surfaceTier(<0..4>)`.
+   - Every spacing/padding/dimension MUST bind to `Tokens.metrics.<token>`.
+   - Every corner radius MUST bind to `Tokens.shape.<token>`.
+   - Every animation MUST bind to `Tokens.motion.<token>`.
+2. **Dual-Surface Engine Compliance (`opaque_tonal` vs. `frosted_tonal_glass`)**:
+   - Root `PanelWindow` shells use **Tier 0** (`Tokens.color.surfaceTier(0)` + `Tokens.color.surfaceBorder(0)`).
+   - In `frosted_tonal_glass` mode, compositor blur (`64px`) applies ONLY to the Tier 0 root container; inner interactive cards (Tier 1/2) and active accents (Tier 4) maintain `90%–100%` opacity so text legibility never drops below WCAG AA (`4.5:1`).
+3. **Adaptive Desktop Paradigm Compliance (`tiling` vs. `floating`)**:
+   - Every shell surface MUST react dynamically to `Tokens.desktopMode` (`"tiling"` | `"floating"`). Never require a shell restart to switch between Tiling Mode and Floating Mode.
+4. **Tabular Numerals (`tnum`) on All Live Counters**:
+   - Clocks, timers, battery percentages, audio percentages, CPU/RAM/network telemetry, and workspace numbers MUST set `font.features: Tokens.typography.tabularFeatures` (`{ "tnum": 1 }`) to eliminate horizontal layout jitter.
+5. **M3 Expressive Spring Physics & Shape Morphing**:
+   - Spatial properties (`x`, `y`, `width`, `height`, `scale`, `radius`) animate using **Spatial Springs** (`Tokens.motion.springFastSpatial`, `springDefaultSpatial`, `springSlowSpatial`), which allow subtle natural overshoot (`damping: 0.65–0.78`).
+   - Visual effect properties (`color`, `opacity`, state layer alpha) animate using **Effects Curves** (`Tokens.motion.springFastEffects`, `springDefaultEffects`) with critical damping (`damping: 1.0`, zero overshoot) so colors never flash past bounds.
+6. **Wayland Layer-Shell Discipline**:
+   - Never use standard X11/floating `Window` for shell panels. Always use `Quickshell.Wayland.PanelWindow` with explicit `WlrLayershell.layer`, `WlrLayershell.namespace`, `WlrLayershell.exclusiveZone`, and `WlrLayershell.keyboardFocus` per `design-system/foundations/05-wayland-layershell-spatial.md`.
+   - The single documented exception is the Settings app (`16-settings.md`), which is an application window (`FloatingWindow`) that users move, resize, and alt-tab to.
+8. **Bars Are User Data, Never Hardcoded Layout**:
+   - There is no fixed Topbar or Dock. Every bar comes from `ConfigService` `bars[]` (`01-bar-system.md`): any edge, any count, bar or island mode, start/center/end sections filled from the widget catalog (`02-bar-widgets.md`).
+   - Surfaces never assume a bar edge or height: popovers use `M3Popover` origin-edge placement, and toasts, OSDs, widgets, and the Overview offset by `BarService.insets(screen)` with `ExclusionMode.Ignore`.
+   - Respect the bar guardrails: security indicators always have a home (fallback pill), core actions stay keybound, and bars stay within the thickness and space bounds.
+7. **Usability & Accessibility Contract (Flair Never Costs Function)** — `design-system/foundations/04-interaction-states-and-input.md`:
+   - Honor `Tokens.reducedMotion`, `expressiveSprings`, `reducedTransparency`, `highContrast`, and `textScale` live: gate spatial Behaviors with `Tokens.motion.spatialMotionEnabled` and decorative loops with `decorativeMotionEnabled`; never hardcode type sizes.
+   - Every interactive element is keyboard-reachable (`activeFocusOnTab`, `Enter`/`Space`, `Menu`/`Shift+F10`), shows the focus ring only under `Tokens.keyboardModality`, and sets `Accessible.name` (mandatory for icon-only controls, together with an `M3Tooltip`).
+   - Middle-click, right-click, and scroll are accelerators only: never destructive, never the only path; wheel input accumulates (`wheelStepAngle`, `touchpadStepPixels`).
+   - Bar targets meet `Tokens.metrics.minPointerTarget`, extend through screen margins to the physical edge, and never change width on hover.
+   - Expressive polygons, editorial serif, and duotone numerals stay within their placement guardrails (`03-motion-and-morphing.md` §5, `02-typography-and-iconography.md` §4); text on the wallpaper follows the Legibility Guard (`01-color-and-surfaces.md` §5).
+
+---
+
+## 4. Recommended 9-Phase Implementation Order for AI Agents
+
+When asked to build the full Quickshell Desktop Environment from this design system, follow the task plan in `docs/superpowers/plans/2026-10-27-mat-shell-implementation-plan.md`. It refines the 9 phases below into 34 tasks and moves pure logic and core services ahead of primitives, because primitives depend on `ShellState`, `BarService` and `KeyboardService`. Paths in `docs/lld/01-architecture.md` (`shell/MatShell/Tokens/`, `shell/MatShell/Services/`) supersede the `shell/tokens/` / `shell/services/` mentions here (LLD C20). The phases, for orientation:
+
+1. **Phase 1 — Token Singletons & Theme Pipeline**: Copy `design-system/tokens/qml/` into `shell/tokens/` (`ColorTokens` already watches `~/.config/mat-shell/theme.json`) and `design-system/tokens/matugen/` into `~/.config/mat-shell/matugen/`. Verify with `matugen color hex "#6750A4" -c ~/.config/mat-shell/matugen/config.toml` (output must equal `theme.baseline.json`), then a wallpaper run with `--source-color-index 0`, and confirm live hot-reload plus instant Dark/Light switching.
+2. **Phase 2 — Core Primitives**: Implement `M3Surface`, `M3StateLayer`, `M3Button`, `M3IconButton`, `M3BarPill`, `M3Switch`, `M3Slider`, `M3TextField`, `M3Popover`, `M3Tooltip`, `M3ContextMenu`, `M3PolygonSurface`, `M3AppIcon`, `M3DuotoneClock`, and `M3HoldToConfirm` — each with the keyboard and `Accessible` contract built in.
+3. **Phase 3 — Global `ShellState`, Services & Wayland Screen Corners**: Create the root `ShellState.qml` singleton (mutual exclusion lanes, security-modal protection, multi-instance trigger registry with origin edge, Bar Focus Mode, IPC incl. `openSettings`), the service singletons from `03-quickshell-service-architecture.md` (including `ConfigService`, `BarService`, `BarWidgetRegistry`, `KeybindService`, `AccessibilityService`, and `KeyboardService`), and per-monitor `M3ScreenCorners`.
+4. **Phase 4 — Bar System, Bar Widgets & OSD HUDs**: Implement `01-bar-system.md` (config-driven bars on any edge, bar/island mode, sections, visibility, guardrails) and `02-bar-widgets.md` (widget registry with horizontal/vertical variants, including `apps` for docks and taskbars), shipping the "Top bar + Dock" preset as the default, then `07-osd-huds.md`.
+5. **Phase 5 — Popover Triad (Control Center, Calendar/Weather, Media)**: Implement `03-control-center.md`, `05-calendar-and-weather.md`, and `06-media-player-popover.md` on `M3Popover`, with shared-origin morphing from bar widgets on any edge.
+6. **Phase 6 — Notification Server (Toasts & Notification Center)**: Implement `04-notifications.md` bound to `Quickshell.Services.Notifications`.
+7. **Phase 7 — Settings App**: Implement `16-settings.md` (two-pane window, Bars editor with live preview and sections editor, Keybindings, Animations, Accessibility, About), verifying every preset in `m3-tokens.json` `modes.bars.presets` renders correctly on all four edges.
+8. **Phase 8 — Full-Screen Overlays & Desktop Widgets (Launcher, Overview, Capture, Theme Studio, Widgets Layer)**: Implement `08-app-and-command-launcher.md`, `09-workspace-and-window-overview.md`, `13-screen-capture-and-recording.md`, `14-wallpaper-and-theme-picker.md`, and `15-desktop-widgets-layer.md` (requires `M3PolygonSurface`, `M3AppIcon`, and `M3DuotoneClock` from Phase 2).
+9. **Phase 9 — Security & Session Surfaces (Lock Screen, Power Menu, Polkit)**: Implement `10-lock-screen.md` (`WlSessionLock`), `11-power-and-session-menu.md`, and `12-polkit-authentication-dialog.md`.

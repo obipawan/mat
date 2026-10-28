@@ -4,8 +4,8 @@
 
 | Tier | What | Where it runs | Command | Gate |
 |---|---|---|---|---|
-| 1 | Unit tests for every `shell/lib/*.mjs` export | Any machine with Node ≥ 22 (macOS, CI, the target) | `node --test tests/lib/` | Every commit |
-| 2 | Static checks: lint, generated-data freshness, design-system verifier | Any machine with Python ≥ 3.11 | `./scripts/verify-design-system.sh` (runs lint and Tier 1) | Every commit |
+| 1 | Unit tests for every `shell/lib/*.mjs` export | Any machine with Node ≥ 22 (macOS, CI, the target) | `node --test "tests/lib/*.test.mjs"` | Every commit |
+| 2 | Static checks: contract manifest, cross-references, locked tests, lint, generated-data freshness, task scope | Any machine with Python ≥ 3.11 | `./scripts/verify-design-system.sh` (runs all but scope, plus Tier 1); `python3 scripts/check-scope.py --task N` | Every commit |
 | 3 | Runtime smoke: the shell starts, IPC calls open and close every surface, and the log has no QML errors | Linux + Wayland (Hyprland) target | `./scripts/smoke-shell.sh` | Every QML task |
 | 4 | Manual checks listed in the task (visual, keyboard, accessibility modes) | Target, by the implementer | the task's checklist | Every QML task; results go in the hand-off |
 
@@ -27,9 +27,11 @@ test("resolve: clock defaults on a horizontal bar", () => {
 ```
 
 - One test file per module, named after it; one `test()` per behaviour; the name says the input and the expected result.
+- Copy every assertion in the task's plan code block **verbatim** (whitespace may differ; `scripts/check-plan-tests.py` checks this). Wrap them in `test()` blocks and add more tests freely.
 - Use only `node:test` and `node:assert/strict`. No npm packages, no mocks of time: pass `now` in.
 - Values come from the specs or `m3-tokens.json`. Import generated data instead of re-typing schema values.
 - A bug fix starts with a test that reproduces the bug.
+- Tests are **append-only** once their task is sealed (`scripts/test-lock.py`): add new `test()` blocks at the end of a file; never edit or delete a locked one. `tests/lib/contracts.test.mjs` checks that each `shell/lib` module exports exactly its contract; it skips modules that do not exist yet.
 
 ---
 
@@ -41,7 +43,7 @@ test("resolve: clock defaults on a horizontal bar", () => {
 3. Replays `tests/smoke/ipc-script.txt` (`<target> <function> [args]` per line, 0.4s apart).
 4. Fails when the log matches `ReferenceError|TypeError|SyntaxError|is not a type|is not installed|Binding loop detected|Unable to assign|Cannot assign|Non-existent attached object|Cannot read property|mat-shell: ERROR`.
 
-Every task that adds a surface or an IPC function appends lines that open it and close it again:
+Every task that adds a surface or an IPC function appends lines that open it and close it again (the file is append-only, like the unit tests):
 
 ```text
 shell toggleControlCenter
@@ -82,7 +84,7 @@ Each QML task lists the rows that apply. Record `pass`/`fail` per cell in the ha
 
 ## 5. What Each Task Hands In
 
-- Test output (`node --test tests/lib/` summary line).
+- Test output (`node --test "tests/lib/*.test.mjs"` summary line).
 - `./scripts/verify-design-system.sh` final line.
 - For QML tasks: `./scripts/smoke-shell.sh` final line and the filled manual rows.
 - Lint suppressions (path:line rule reason).

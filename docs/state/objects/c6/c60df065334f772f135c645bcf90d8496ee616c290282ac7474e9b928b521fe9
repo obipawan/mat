@@ -1,0 +1,26 @@
+# Task 4: `barConfig.mjs` — gate receipt
+
+Written by `scripts/task-gate.py` from real command output. Edit only the last two sections.
+
+## Hand-off
+
+```text
+Task: 4 `barConfig.mjs`
+Files: A shell/lib/barConfig.mjs; A tests/lib/barConfig.test.mjs
+Red run: FAIL as expected before implementation: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/Users/pawan.kumarm/workspace/mat/shell/lib/barConfig.mjs' imported from /Users/pawan.kumarm/workspace/mat/tests/lib/barConfig.test.mjs
+Scope: ✓ check-scope: Task 4 changed 3 files, all in its Files list
+Tests: tests 78 pass 65 fail 0 skipped 13
+Verify: === ALL CHECKS PASSED SUCCESSFULLY ===
+Lint suppressions: 0
+Locked files changed: none (the scope check refuses a change to a locked test)
+```
+
+## Agent notes
+
+- Spec conflicts met: none
+- Questions for the design owner: none (wrong-type values, unknown keys and partial sections were settled in 02-contracts.md §2.5 before the task)
+- Not done / follow-ups: none
+
+## Manual checks
+
+- none (pure logic task)

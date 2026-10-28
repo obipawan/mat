@@ -1,0 +1,150 @@
+// The keybind action model and compositor bind generation
+// (docs/lld/02-contracts.md §2.11; spec interactions/02 §1, 01-architecture.md §7).
+
+const IPC_PREFIX = "qs -c mat-shell ipc call";
+
+const CORE = ["toggleLauncher", "openSettings", "togglePower"];
+const REPEAT = ["volumeUp", "volumeDown", "brightnessUp", "brightnessDown"];
+
+// [id, label, group, "target fn args…", default chords]; data table in 02-contracts.md §2.11
+const TABLE = [
+  ["toggleLauncher", "Open launcher", "Launcher & Overview", "shell toggleLauncher", ["Super", "Super+Space"]],
+  ["launcherClipboard", "Clipboard history", "Launcher & Overview", "shell openLauncherMode clip", ["Super+V"]],
+  ["launcherEmoji", "Emoji picker", "Launcher & Overview", "shell openLauncherMode emoji", ["Super+Period"]],
+  ["toggleOverview", "Workspace overview", "Launcher & Overview", "shell toggleOverview", ["Super+Tab"]],
+  ["toggleControlCenter", "Control center", "Shell", "shell toggleControlCenter", ["Super+A"]],
+  ["toggleNotifications", "Notification center", "Shell", "shell toggleNotifications", ["Super+N"]],
+  ["toggleCalendar", "Calendar & weather", "Shell", "shell toggleCalendar", []],
+  ["toggleMedia", "Media player", "Media & Volume", "shell toggleMedia", ["Super+M"]],
+  ["togglePower", "Power menu", "Session", "shell togglePower", ["Super+Escape"]],
+  ["toggleCapture", "Screenshot & recording", "Capture", "shell toggleCapture", ["Print", "Super+Shift+S"]],
+  ["toggleThemeStudio", "Wallpaper & theme", "Shell", "shell toggleThemeStudio", ["Super+W"]],
+  ["toggleWidgetPeek", "Desktop widgets", "Shell", "shell toggleWidgetPeek", ["Super+D"]],
+  ["openSettings", "Settings", "Shell", "shell openSettings \"\"", ["Super+Comma"]],
+  ["focusBar", "Focus the bar", "Shell", "shell focusBar", ["Ctrl+Alt+Tab"]],
+  ["lock", "Lock screen", "Session", "shell lock", ["Super+L"]],
+  ["volumeUp", "Volume up", "Media & Volume", "osd changeVolume 5", ["XF86AudioRaiseVolume"]],
+  ["volumeDown", "Volume down", "Media & Volume", "osd changeVolume -5", ["XF86AudioLowerVolume"]],
+  ["toggleMute", "Mute", "Media & Volume", "osd toggleMute", ["XF86AudioMute"]],
+  ["brightnessUp", "Brightness up", "Media & Volume", "osd changeBrightness 5", ["XF86MonBrightnessUp"]],
+  ["brightnessDown", "Brightness down", "Media & Volume", "osd changeBrightness -5", ["XF86MonBrightnessDown"]],
+];
+
+export const ACTIONS = TABLE.map(([id, label, group, call, defaultChords]) => {
+  const [target, fn, ...args] = call.split(" ");
+  return {
+    id, label, group, defaultChords,
+    ipc: { target, fn, args: args.map((a) => (a === "\"\"" ? "" : a)) },
+    core: CORE.includes(id),
+    repeat: REPEAT.includes(id),
+  };
+});
+
+const MODIFIERS = ["Ctrl", "Alt", "Shift", "Super"];
+const MODIFIER_ALIASES = { ctrl: "Ctrl", control: "Ctrl", alt: "Alt", shift: "Shift", super: "Super", mod4: "Super",
+                           win: "Super", meta: "Super", logo: "Super" };
+const KEY_ALIASES = { esc: "Escape", ",": "Comma", ".": "Period" };
+
+const lookup = (table, k) => (Object.prototype.hasOwnProperty.call(table, k) ? table[k] : undefined);
+const INVALID = { mods: [], key: "" };
+
+// Chord text ends up in compositor config files, so anything but modifiers and plain key names makes it invalid.
+function parse(chord) {
+  if (typeof chord !== "string") return INVALID;
+  const mods = [];
+  let key = "";
+  for (const raw of chord.split("+")) {
+    const part = raw.trim();
+    if (!part) continue;
+    const mod = lookup(MODIFIER_ALIASES, part.toLowerCase());
+    if (mod) {
+      if (!mods.includes(mod)) mods.push(mod);
+      continue;
+    }
+    key = lookup(KEY_ALIASES, part.toLowerCase()) || (part.length === 1 ? part.toUpperCase() : part);
+    if (!/^[A-Za-z0-9_]+$/.test(key)) return INVALID;
+  }
+  mods.sort((a, b) => MODIFIERS.indexOf(a) - MODIFIERS.indexOf(b));
+  return { mods, key };
+}
+
+function chordsOf(binds, id) {
+  const list = binds && typeof binds === "object" ? lookup(binds, id) : undefined;
+  return Array.isArray(list) ? list : [];
+}
+
+export function normalizeChord(chord) {
+  const { mods, key } = parse(chord);
+  return mods.concat(key ? [key] : []).join("+");
+}
+
+export function defaultBinds() {
+  const binds = {};
+  for (const a of ACTIONS) binds[a.id] = a.defaultChords.map(normalizeChord);
+  return binds;
+}
+
+export function findConflict(binds, chord, exceptId) {
+  const wanted = normalizeChord(chord);
+  if (!wanted) return null;
+  for (const a of ACTIONS) {
+    if (a.id !== exceptId && chordsOf(binds, a.id).some((c) => normalizeChord(c) === wanted)) return a.id;
+  }
+  return null;
+}
+
+export function canUnbind(id) {
+  const action = ACTIONS.find((a) => a.id === id);
+  return !(action && action.core);
+}
+
+const LOWER_KEYS = { Comma: "comma", Period: "period", Space: "space" };
+const HYPR_MODIFIERS = ["Super", "Ctrl", "Alt", "Shift"]; // Hyprland lines lead with SUPER (02-contracts.md §2.11 example)
+
+export function hyprBindLines(id, chord) {
+  const { mods, key } = parse(chord);
+  if (!key) {
+    return mods.length === 1 && mods[0] === "Super" ? ["bindr = SUPER, Super_L, global, mat-shell:" + id] : [];
+  }
+  const action = ACTIONS.find((a) => a.id === id);
+  const keyword = action && action.repeat ? "binde" : "bind";
+  const ordered = mods.slice().sort((a, b) => HYPR_MODIFIERS.indexOf(a) - HYPR_MODIFIERS.indexOf(b));
+  return [keyword + " = " + ordered.map((m) => m.toUpperCase()).join(" ") + ", " + (lookup(LOWER_KEYS, key) || key) + ", global, mat-shell:" + id];
+}
+
+export function bindsConf(binds) {
+  const lines = ["# Generated by mat-shell KeybindService — edits are overwritten"];
+  for (const a of ACTIONS) {
+    for (const chord of chordsOf(binds, a.id)) lines.push(...hyprBindLines(a.id, chord));
+  }
+  return lines.join("\n") + "\n";
+}
+
+function snippet(binds, line) {
+  const out = [];
+  for (const a of ACTIONS) {
+    for (const chord of chordsOf(binds, a.id)) {
+      const { mods, key } = parse(chord);
+      if (key) out.push(line(mods, key, a.ipc));
+    }
+  }
+  return out.join("\n") + (out.length ? "\n" : "");
+}
+
+export function niriSnippet(binds) {
+  const NIRI = { Super: "Mod", Ctrl: "Ctrl", Alt: "Alt", Shift: "Shift" };
+  return snippet(binds, (mods, key, ipc) => {
+    const words = ["qs", "-c", "mat-shell", "ipc", "call", ipc.target, ipc.fn].concat(ipc.args);
+    return mods.map((m) => NIRI[m]).concat([key]).join("+") + " { spawn " + words.map((w) => JSON.stringify(w)).join(" ") + "; }";
+  });
+}
+
+export function swaySnippet(binds) {
+  const SWAY = { Super: "Mod4", Ctrl: "Control", Alt: "Mod1", Shift: "Shift" };
+  return snippet(binds, (mods, key, ipc) => {
+    const k = lookup(LOWER_KEYS, key) || (key.length === 1 ? key.toLowerCase() : key);
+    const args = ipc.args.map((a) => (a === "" ? "\"\"" : a));
+    return "bindsym " + mods.map((m) => SWAY[m]).concat([k]).join("+") + " exec " +
+      [IPC_PREFIX, ipc.target, ipc.fn].concat(args).join(" ");
+  });
+}

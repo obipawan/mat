@@ -1,6 +1,8 @@
 # matugen configuration for the Material 3 Expressive Quickshell DE (requires matugen >= 4.0)
 #
-# Install:  cp -r design-system/tokens/matugen ~/.config/mat-shell/matugen
+# Install:  automatic. ThemeService seeds $XDG_CONFIG_HOME/mat-shell/matugen/ (default ~/.config/mat-shell/matugen/)
+#           from the shell's copy of this folder, rewriting every ~/.config/mat-shell path to the real
+#           config folder (paths.rebaseMatugenConfig). Edits to the seeded copy are kept.
 # Generate: matugen image <wallpaper> -c ~/.config/mat-shell/matugen/config.toml \
 #             -t <Tokens.schemeVariant> --source-color-index 0 [--contrast 0.5|1.0]
 #

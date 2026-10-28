@@ -1,0 +1,94 @@
+// Bar visibility, exclusive zones, stacking, insets and click-catcher regions
+// (docs/lld/02-contracts.md §2.6; spec 01-bar-system.md §2–§7, foundations/05 §3).
+import { edgeGap, endGap, isVertical } from "./barConfig.mjs";
+
+const EDGES = ["top", "right", "bottom", "left"];
+const EMPTY = { x: 0, y: 0, width: 0, height: 0 };
+
+// Bar ids come from config.json, so they are read and written as own keys only ("toString", "__proto__").
+function ownValue(obj, key, fallback) {
+  return Object.prototype.hasOwnProperty.call(obj, key) ? obj[key] : fallback;
+}
+
+function setOwn(obj, key, value) {
+  Object.defineProperty(obj, key, { value, writable: true, enumerable: true, configurable: true });
+}
+
+export function effectiveVisibility(bar, desktopMode) {
+  if (bar.visibility === "auto") return desktopMode === "tiling" ? "dodge" : "always";
+  return bar.visibility;
+}
+
+export function isShown(bar, ctx) {
+  const v = effectiveVisibility(bar, ctx.desktopMode);
+  if (v === "always") return true;
+  if (ctx.revealed || ctx.barFocusActive || ctx.settingsPreview) return true;
+  if (v === "autohide") return false;
+  return !ctx.windowsOverlap;
+}
+
+export function extent(bar) {
+  return bar.thickness + edgeGap(bar);
+}
+
+export function exclusiveZone(bar, shown, desktopMode) {
+  return bar.reserveSpace && shown && effectiveVisibility(bar, desktopMode) !== "autohide" ? extent(bar) : 0;
+}
+
+export function stackOffsets(bars, shownIds) {
+  const offsets = {};
+  for (const edge of EDGES) {
+    let offset = 0;
+    for (const bar of bars.filter((b) => b.position === edge)) {
+      setOwn(offsets, bar.id, offset);
+      if (shownIds.includes(bar.id)) offset += extent(bar);
+    }
+  }
+  return offsets;
+}
+
+export function insets(bars, shownIds) {
+  const offsets = stackOffsets(bars, shownIds);
+  const out = { top: 0, right: 0, bottom: 0, left: 0 };
+  for (const bar of bars) {
+    if (shownIds.includes(bar.id)) out[bar.position] = Math.max(out[bar.position], ownValue(offsets, bar.id, 0) + extent(bar));
+  }
+  return out;
+}
+
+export function maxInsets(bars) {
+  return insets(bars, bars.filter((b) => b.enabled).map((b) => b.id));
+}
+
+export function lengthPx(bar, avail, implicit) {
+  const room = avail - 2 * endGap(bar);
+  if (bar.length === "full") return room;
+  if (bar.length === "fit") return Math.min(implicit, room);
+  return Math.min(Math.round((avail * bar.length) / 100), room);
+}
+
+export function alignOffset(bar, avail, size) {
+  if (bar.length === "full" || bar.alignment === "start") return endGap(bar);
+  if (bar.alignment === "center") return Math.round((avail - size) / 2);
+  return avail - size - endGap(bar);
+}
+
+export function regions(bars, shownIds, screen, lengths) {
+  const out = [];
+  for (let i = 0; i < 8; i++) out.push(Object.assign({}, EMPTY));
+  const offsets = stackOffsets(bars, shownIds);
+  EDGES.forEach((edge, edgeIndex) => {
+    bars.filter((b) => b.position === edge && shownIds.includes(b.id)).slice(0, 2).forEach((bar, stackIndex) => {
+      const reach = ownValue(offsets, bar.id, 0) + extent(bar);
+      const avail = isVertical(bar) ? screen.height : screen.width;
+      const length = ownValue(lengths, bar.id, lengthPx(bar, avail, avail));
+      const along = alignOffset(bar, avail, length);
+      out[edgeIndex * 2 + stackIndex] =
+        edge === "top" ? { x: along, y: 0, width: length, height: reach } :
+        edge === "bottom" ? { x: along, y: screen.height - reach, width: length, height: reach } :
+        edge === "left" ? { x: 0, y: along, width: reach, height: length } :
+        { x: screen.width - reach, y: along, width: reach, height: length };
+    });
+  });
+  return out;
+}

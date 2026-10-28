@@ -1362,15 +1362,13 @@
   "typography": {
     "families": {
       "sans": [
-        "Google Sans Text",
-        "Inter",
+        "Google Sans Flex",
         "Roboto Flex",
         "sans-serif"
       ],
       "display": [
-        "Google Sans",
-        "Outfit",
-        "Inter Display",
+        "Google Sans Flex",
+        "Roboto Flex",
         "sans-serif"
       ],
       "editorial": [
@@ -1381,7 +1379,6 @@
       ],
       "mono": [
         "JetBrains Mono",
-        "Google Sans Mono",
         "monospace"
       ],
       "icons": [

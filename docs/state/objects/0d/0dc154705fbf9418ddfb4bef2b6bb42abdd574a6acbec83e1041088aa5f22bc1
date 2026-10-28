@@ -1,0 +1,539 @@
+{
+  "lib": {
+    "barConfig.mjs": [
+      "BAR_DEFAULTS",
+      "FIRST_RUN_PIN_GROUPS",
+      "barAppliesToScreen",
+      "defaultConfig",
+      "edgeGap",
+      "endGap",
+      "firstRunPinned",
+      "isVertical",
+      "normalizeBar",
+      "normalizeConfig",
+      "placementProblems",
+      "presetBars",
+      "thicknessRange"
+    ],
+    "barGeometry.mjs": [
+      "alignOffset",
+      "effectiveVisibility",
+      "exclusiveZone",
+      "extent",
+      "insets",
+      "isShown",
+      "lengthPx",
+      "maxInsets",
+      "regions",
+      "stackOffsets"
+    ],
+    "clockFormat.mjs": [
+      "clockPattern",
+      "qtPatternError",
+      "verticalPatterns"
+    ],
+    "generated/barPresets.mjs": [
+      "BAR_GUARDRAILS",
+      "BAR_PRESETS",
+      "WIDGET_TYPES"
+    ],
+    "generated/widgetOptionsSchema.mjs": [
+      "WIDGET_OPTIONS",
+      "WIDGET_OPTION_MIGRATIONS"
+    ],
+    "hyprParse.mjs": [
+      "parseClients",
+      "windowsOverlap"
+    ],
+    "keybinds.mjs": [
+      "ACTIONS",
+      "bindsConf",
+      "canUnbind",
+      "defaultBinds",
+      "findConflict",
+      "hyprBindLines",
+      "niriSnippet",
+      "normalizeChord",
+      "swaySnippet"
+    ],
+    "launcherQuery.mjs": [
+      "fuzzyScore",
+      "parseQuery",
+      "rankApps"
+    ],
+    "notifications.mjs": [
+      "groupHistory",
+      "sanitizeBody",
+      "shouldToast",
+      "toastTimeoutMs"
+    ],
+    "overflow.mjs": [
+      "planOverflow"
+    ],
+    "paths.mjs": [
+      "rebaseMatugenConfig",
+      "userDirs"
+    ],
+    "popoverPlacement.mjs": [
+      "placePopover"
+    ],
+    "session.mjs": [
+      "ACTION_COMMANDS",
+      "blockingInhibitors",
+      "logoutCommand",
+      "parseInhibitorsJson"
+    ],
+    "shellReducer.mjs": [
+      "INITIAL",
+      "LAUNCHER_MODES",
+      "MODALS",
+      "POPOVERS",
+      "closeModal",
+      "closePopover",
+      "escape",
+      "focusBar",
+      "lock",
+      "openLauncherMode",
+      "openModal",
+      "openSettings",
+      "securityModalActive",
+      "toggleModal",
+      "togglePopover",
+      "unlock"
+    ],
+    "telemetry.mjs": [
+      "cpuPercent",
+      "parseMeminfo",
+      "parseProcStat"
+    ],
+    "util.mjs": [
+      "clamp",
+      "clone",
+      "deepEqual",
+      "pascalCase"
+    ],
+    "weather.mjs": [
+      "isStale",
+      "parseWttr",
+      "weatherIcon"
+    ],
+    "wheel.mjs": [
+      "wheelStep"
+    ],
+    "widgetCatalog.mjs": [
+      "CATALOG",
+      "catalogEntry",
+      "sourceFile"
+    ],
+    "widgetOptions.mjs": [
+      "diffFromDefaults",
+      "fieldApplies",
+      "hasOptions",
+      "isFieldVisible",
+      "limitNote",
+      "migrate",
+      "moveListItem",
+      "optionsSchema",
+      "resolve",
+      "toggleListItem"
+    ]
+  },
+  "singletons": {
+    "AccessibilityService": {
+      "file": "MatShell/Services/AccessibilityService.qml",
+      "members": [
+        "setSwitch"
+      ]
+    },
+    "AudioService": {
+      "file": "MatShell/Services/AudioService.qml",
+      "members": [
+        "activeCaptureStreams",
+        "appStreams",
+        "micMuted",
+        "muted",
+        "setDefaultSink",
+        "setVolume",
+        "sink",
+        "sinks",
+        "source",
+        "toggleMicMute",
+        "toggleMute",
+        "volume"
+      ]
+    },
+    "BarService": {
+      "file": "MatShell/Services/BarService.qml",
+      "members": [
+        "alignOffset",
+        "bars",
+        "canPlace",
+        "edgeGap",
+        "effectiveThickness",
+        "endGap",
+        "hostsWidget",
+        "innerEdge",
+        "insets",
+        "instances",
+        "isShown",
+        "lengthPx",
+        "maxInsets",
+        "placementProblems",
+        "regions",
+        "reportLength",
+        "setEdgeHover",
+        "thicknessRange"
+      ]
+    },
+    "BarWidgetRegistry": {
+      "file": "MatShell/Services/BarWidgetRegistry.qml",
+      "members": [
+        "catalog",
+        "description",
+        "diffFromDefaults",
+        "has",
+        "hasOptions",
+        "icon",
+        "label",
+        "migrate",
+        "optionsSchema",
+        "resolve",
+        "sectionLabel",
+        "source"
+      ]
+    },
+    "BatteryService": {
+      "file": "MatShell/Services/BatteryService.qml",
+      "members": [
+        "isCharging",
+        "percentage",
+        "powerProfile",
+        "present",
+        "setPowerProfile",
+        "timeToEmptySec",
+        "timeToFullSec"
+      ]
+    },
+    "BluetoothService": {
+      "file": "MatShell/Services/BluetoothService.qml",
+      "members": [
+        "available",
+        "connect",
+        "devices",
+        "disconnect",
+        "powered",
+        "setPowered"
+      ]
+    },
+    "BrightnessService": {
+      "file": "MatShell/Services/BrightnessService.qml",
+      "members": [
+        "adjust",
+        "available",
+        "brightness",
+        "set"
+      ]
+    },
+    "CaptureService": {
+      "file": "MatShell/Services/CaptureService.qml",
+      "members": [
+        "lastFile",
+        "recording",
+        "recordingSinceMs",
+        "screenshot",
+        "screenshotScreen",
+        "startRecording",
+        "stopRecording"
+      ]
+    },
+    "CompositorService": {
+      "file": "MatShell/Services/CompositorService.qml",
+      "members": [
+        "activeSubmap",
+        "activeWindowAppId",
+        "activeWindowTitle",
+        "clients",
+        "exit",
+        "focusWindow",
+        "focusedScreen",
+        "focusedWorkspaceId",
+        "kind",
+        "moveFocusedWindowToWorkspace",
+        "moveWindowToWorkspace",
+        "refreshClients",
+        "switchToWorkspace",
+        "toggleFloating",
+        "windowsOverlap",
+        "workspaces"
+      ]
+    },
+    "ConfigService": {
+      "file": "MatShell/Services/ConfigService.qml",
+      "members": [
+        "addBar",
+        "applyPreset",
+        "cacheDir",
+        "config",
+        "configDir",
+        "error",
+        "get",
+        "homeDir",
+        "loaded",
+        "removeBar",
+        "removeWidget",
+        "restoreLastGood",
+        "set",
+        "setWidgetOptions",
+        "transaction",
+        "undo",
+        "undoLabel",
+        "updateBar"
+      ]
+    },
+    "KeybindService": {
+      "file": "MatShell/Services/KeybindService.qml",
+      "members": [
+        "binds",
+        "compositor",
+        "reset",
+        "resetAll",
+        "setChord",
+        "snippet"
+      ]
+    },
+    "KeyboardService": {
+      "file": "MatShell/Services/KeyboardService.qml",
+      "members": [
+        "capsLock",
+        "layoutCode",
+        "layoutIndex",
+        "layouts",
+        "nextLayout",
+        "numLock",
+        "setLayout"
+      ]
+    },
+    "LauncherService": {
+      "file": "MatShell/Services/LauncherService.qml",
+      "members": [
+        "activate",
+        "apps",
+        "calc",
+        "clipboard",
+        "pasteClip",
+        "pin",
+        "query",
+        "usage"
+      ]
+    },
+    "MediaService": {
+      "file": "MatShell/Services/MediaService.qml",
+      "members": [
+        "activePlayer",
+        "artPalette",
+        "isPlaying",
+        "length",
+        "next",
+        "players",
+        "position",
+        "positionActive",
+        "previous",
+        "seek",
+        "selectPlayer",
+        "togglePlaying",
+        "trackAlbum",
+        "trackArtUrl",
+        "trackArtist",
+        "trackTitle"
+      ]
+    },
+    "NetworkService": {
+      "file": "MatShell/Services/NetworkService.qml",
+      "members": [
+        "connect",
+        "connected",
+        "disconnect",
+        "networks",
+        "scan",
+        "scanning",
+        "setWifiEnabled",
+        "signal",
+        "ssid",
+        "vpnActive",
+        "wifiEnabled"
+      ]
+    },
+    "NotificationService": {
+      "file": "MatShell/Services/NotificationService.qml",
+      "members": [
+        "clearAll",
+        "dismiss",
+        "dndEnabled",
+        "history",
+        "invokeAction",
+        "markAllRead",
+        "reply",
+        "setDnd",
+        "toasts",
+        "unreadCount"
+      ]
+    },
+    "PolkitService": {
+      "file": "MatShell/Services/PolkitService.qml",
+      "members": [
+        "actionId",
+        "attemptsLeft",
+        "authenticate",
+        "cancel",
+        "details",
+        "error",
+        "finished",
+        "iconName",
+        "identities",
+        "message",
+        "pending",
+        "requested",
+        "verifying"
+      ]
+    },
+    "SessionService": {
+      "file": "MatShell/Services/SessionService.qml",
+      "members": [
+        "inhibitors",
+        "refreshInhibitors",
+        "run"
+      ]
+    },
+    "SettingsIndex": {
+      "file": "MatShell/Services/SettingsIndex.qml",
+      "members": [
+        "categories",
+        "indexOf",
+        "pageFile",
+        "search"
+      ]
+    },
+    "ShellState": {
+      "file": "MatShell/State/ShellState.qml",
+      "members": [
+        "activeModal",
+        "activePopover",
+        "barFocusActive",
+        "closeActiveModal",
+        "closeActivePopover",
+        "dndEnabled",
+        "focusBar",
+        "handleEscape",
+        "launcherMode",
+        "lockSession",
+        "openLauncherMode",
+        "openModal",
+        "openSettings",
+        "popoverOriginEdge",
+        "popoverOriginRect",
+        "popoverTrigger",
+        "registerTrigger",
+        "resolveTrigger",
+        "securityModalActive",
+        "sessionLocked",
+        "settingsRequested",
+        "toggleModal",
+        "togglePopover",
+        "unlockSession",
+        "unregisterTrigger",
+        "widgetPeekActive"
+      ]
+    },
+    "TelemetryService": {
+      "file": "MatShell/Services/TelemetryService.qml",
+      "members": [
+        "cpuPercent",
+        "diskPercent",
+        "gpuPercent",
+        "netDownBps",
+        "netUpBps",
+        "ramPercent",
+        "sample",
+        "swapPercent",
+        "temperatureC"
+      ]
+    },
+    "ThemeService": {
+      "file": "MatShell/Services/ThemeService.qml",
+      "members": [
+        "applyScheme",
+        "applyWallpaper",
+        "busy",
+        "canUndo",
+        "currentWallpaper",
+        "lastError",
+        "previewPalette",
+        "regenerate",
+        "regionLuma",
+        "themeFailed",
+        "undoLastTheme",
+        "wallpapers"
+      ]
+    },
+    "WeatherService": {
+      "file": "MatShell/Services/WeatherService.qml",
+      "members": [
+        "error",
+        "loading",
+        "refresh",
+        "stale",
+        "weather"
+      ]
+    }
+  },
+  "primitives": [
+    "M3AppIcon",
+    "M3BarPill",
+    "M3Button",
+    "M3Card",
+    "M3CircularProgress",
+    "M3ContextMenu",
+    "M3Divider",
+    "M3DuotoneClock",
+    "M3FilterChip",
+    "M3GlassPanel",
+    "M3HoldToConfirm",
+    "M3IconButton",
+    "M3LinearProgress",
+    "M3PolygonSurface",
+    "M3Popover",
+    "M3ScreenCorners",
+    "M3Scrim",
+    "M3ScrollBar",
+    "M3SearchField",
+    "M3SegmentedButton",
+    "M3Slider",
+    "M3StateLayer",
+    "M3Surface",
+    "M3Switch",
+    "M3TextField",
+    "M3Tooltip"
+  ],
+  "widgets": {
+    "launcher": "LauncherWidget.qml",
+    "search": "SearchWidget.qml",
+    "workspaces": "WorkspacesWidget.qml",
+    "submap": "SubmapWidget.qml",
+    "windowTitle": "WindowTitleWidget.qml",
+    "media": "MediaWidget.qml",
+    "clock": "ClockWidget.qml",
+    "controlCenter": "ControlCenterWidget.qml",
+    "notifications": "NotificationsWidget.qml",
+    "tray": "TrayWidget.qml",
+    "privacy": "PrivacyWidget.qml",
+    "recording": "RecordingWidget.qml",
+    "telemetry": "TelemetryWidget.qml",
+    "keyboardLayout": "KeyboardLayoutWidget.qml",
+    "power": "PowerWidget.qml",
+    "apps": "AppsWidget.qml",
+    "widgetPeek": "WidgetPeekWidget.qml",
+    "settings": "SettingsWidget.qml",
+    "separator": "SeparatorWidget.qml",
+    "spacer": "SpacerWidget.qml"
+  }
+}

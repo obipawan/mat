@@ -1,0 +1,3 @@
+# IPC calls replayed by scripts/smoke-shell.sh, one per line: <target> <function> [args…]
+# Each task that adds an IPC function or surface appends the calls that exercise it (open, then close).
+# Optional expectation: `<target> <function> [args…] => <extended regex>` must match the call's stdout.

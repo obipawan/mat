@@ -33,8 +33,11 @@ A change that breaks a G or R rule is rejected even when its tests pass.
 | G18 | No `console.log` | `console.warn("mat-shell: …")` for real problems; otherwise remove |
 | G19 | `M3IconButton` and `M3BarPill` instances set `accessibleName` | Add a name (the tooltip falls back to it) |
 | G20 | `lib/*.mjs` contains no `Qt`, `Quickshell`, `Tokens`, or `console.log` | Pass values in as arguments |
+| G21 | Closed name lists (`docs/lld/contracts.json`, generated from `02-contracts.md`): `<Service>.<member>` and `ShellState.<member>` exist in the contract; `Tokens.<x>` and `Tokens.<group>.<x>` exist in the token QML; `<Alias>.<fn>` exists in the imported `lib/` module; a service or `ShellState` declares exactly its contract members at its root (others start with `_` and stay private); files under `lib/`, `MatShell/Services/`, `MatShell/Primitives/` and `bar/widgets/` are on their list | Use the contract name. If the contract lacks what you need, stop and ask (README §4); never add a public member or file on your own |
+| G22 | Every program a `Process` (in services) or `execDetached` starts is a key of `commands` in `packaging/dependencies.json`. The command is an array whose program is a string literal, or comes from a `lib/` command table (`session.mjs`, checked by `tests/lib/dependencies.test.mjs`); `sh -c` takes a literal script whose every program is declared too | Use a declared program. If the spec needs one that is missing, stop and ask (README §4); never add a key on your own |
+| G23 | No repository or home paths in shell code: no literal starting `design-system/`, `scripts/`, `docs/`, `~/`, `/home/`, `/Users/`, `/root/`; no literal spelling `.config/mat-shell` or `.cache/mat-shell`; no relative path that leaves `shell/`; `Quickshell.env("HOME")` and `env("XDG_*")` only in `ConfigService` (and the tokens) | `ConfigService.configDir` / `cacheDir` / `homeDir`; runtime files under `Quickshell.shellDir + "/assets/"` (`02-contracts.md` §1 "Paths") |
 
-Suppression syntax: `// lint-allow Gxx: <reason, 10+ characters, cite the spec>`. It works on that line only, and each one is listed in the hand-off. A suppression for G06, G07, G08, G15, G17 or G20 is always rejected.
+Suppression syntax: `// lint-allow Gxx: <reason, 10+ characters, cite the spec>`. It works on that line only, and each one is listed in the hand-off. A suppression for G06, G07, G08, G15, G17, G20, G21, G22 or G23 is always rejected.
 
 ---
 
@@ -43,9 +46,9 @@ Suppression syntax: `// lint-allow Gxx: <reason, 10+ characters, cite the spec>`
 | ID | Rule |
 |---|---|
 | R01 | Never hand-edit generated files: `shell/MatShell/Tokens/*`, `shell/lib/generated/*`. Change the source and run `scripts/gen-shell-data.py`. |
-| R02 | One task per commit, and only the files the task lists. Unrelated refactors are rejected. |
+| R02 | One task per seal, and only the files the task lists. Unrelated refactors are rejected. |
 | R03 | Tests come first. Never delete, skip, or loosen an assertion, a lint fixture, or an `expect:` line to make a change pass. |
-| R04 | No new dependencies: no npm packages, Qt modules, or CLI tools beyond those named in the specs or this LLD. |
+| R04 | No new dependencies: no npm packages, Qt modules, or CLI tools beyond those in `packaging/dependencies.json` (G22) and the specs. |
 | R05 | State drives windows: `visible`, layer, and focus are bindings to `ShellState`/service properties. No imperative `show()`/`hide()` from other files. |
 | R06 | `Process.command` is an argument array. Use `["sh", "-c", script, "sh", arg1, …]` only when the spec's command has a pipe, and pass every variable (paths, SSIDs, notification text, clipboard ids) as a positional argument (`"$1"`), never by string interpolation. |
 | R07 | Pollers and timers run only while a visible consumer needs them (`interactions/03` §2.3). Hidden widgets, closed popovers, and a locked session cost zero wakeups. |
@@ -83,7 +86,7 @@ Suppression syntax: `// lint-allow Gxx: <reason, 10+ characters, cite the spec>`
 | C07 | Popover ids are snake_case (`control_center`) while widget types are camelCase (`controlCenter`) | Both stay as they are; use the map in `01-architecture.md` §5 |
 | C08 | `privacy` "opens Privacy popover", but there is no such Lane 2 popover | An `M3ContextMenu` listing the capturing apps |
 | C09 | Keybinds go through `qs ipc call` (`interactions/02`) and through Hyprland `global, mat-shell:<action>` (`16-settings.md`) | Hyprland: `GlobalShortcut { appid: "mat-shell" }` in `ShellState` plus `binds.conf`; Niri/Sway/scripts: `qs -c mat-shell ipc call` |
-| C10 | `02-bar-widgets.md` §2.1 says "ascending priority (1 first)", but §1.1 marks `telemetry` (5) as "hidden first" | Highest number collapses first (`overflow.mjs`): telemetry (5) → tray / keyboardLayout / settings (4) → media / widgetPeek (3) → search (2) → windowTitle (1). **Confirm with the design owner**; the order lives in `widgetCatalog.mjs` only |
+| C10 | `02-bar-widgets.md` §2.1 says "ascending priority (1 first)", but `02-bar-widgets.md` §1.1 marks `telemetry` (5) as "hidden first" | Highest number collapses first (`overflow.mjs`): telemetry (5) → tray / keyboardLayout / settings (4) → media / widgetPeek (3) → search (2) → windowTitle (1). **Confirm with the design owner**; the order lives in `widgetCatalog.mjs` only |
 | C11 | The launcher skeleton hardcodes scrim alpha `0.38` | `Tokens.metrics.scrimAlpha` |
 | C12 | The polkit skeleton's Authenticate only closes the modal | Full flow through `PolkitService` (`Quickshell.Services.Polkit`) |
 | C13 | `M3Slider` muted track is `surfaceVariant` in code and `onSurface @38%` in the table | Table wins |
@@ -132,11 +135,11 @@ Docs: `https://quickshell.org/docs/v0.3.2/types/<Module>/<Type>/`. Always use a 
 | `Quickshell.Services.SystemTray` | `SystemTray.items`; `SystemTrayItem` (`icon`, `activate()`, `secondaryActivate()`, `scroll()`, `menu`, `hasMenu`, `display(parentWindow, x, y)`) |
 | `Quickshell.Services.Notifications` | `NotificationServer` (`bodySupported`, `actionsSupported`, `imageSupported`, `inlineReplySupported`, `persistenceSupported`, `keepOnReload`, `trackedNotifications`, signal `notification(Notification)`); `Notification` (`tracked`, `urgency`, `dismiss()`, `expire()`, `sendInlineReply(text)`, `actions[].invoke()`); `NotificationUrgency.Low/Normal/Critical` |
 | `Quickshell.Services.Pam` | `PamContext` (`config`, `configDirectory`, `user`, `active`, `message`, `responseRequired`, `start()`, `respond(string)`, `abort()`, signal `completed(PamResult)`); `PamResult.Success/Failed/Error/MaxTries` |
-| `Quickshell.Services.Polkit` (≥ 0.3.0) | `PolkitAgent`: read its doc page before Task 22 and copy the member names into `PolkitService` comments |
-| `Quickshell.Bluetooth` (≥ 0.2.0) | read its doc page before Task 20 and copy the member names into `BluetoothService` comments |
+| `Quickshell.Services.Polkit` (≥ 0.3.0) | `PolkitAgent`: read its doc page before Task 22 (polkit) and copy the member names into `PolkitService` comments |
+| `Quickshell.Bluetooth` (≥ 0.2.0) | read its doc page before Task 20 (Bluetooth) and copy the member names into `BluetoothService` comments |
 | Qt | ES-module imports `import "x.mjs" as X` → `X.fn()` (Qt 6); `Accessible.announce(message, politeness)` (Qt ≥ 6.8); `SpringAnimation`, `HoverHandler`, `TapHandler`, `WheelHandler`, `DragHandler`, `MultiEffect` (`QtQuick.Effects`), `Shape` (`QtQuick.Shapes`) |
 
-CLI: `qs -c mat-shell` (or `-p <dir>`) starts the shell; `qs -c mat-shell ipc call <target> <fn> [args]`, `qs -c mat-shell ipc show`, `qs -c mat-shell log -f`. Quickshell itself does not read `QML_IMPORT_PATH`, but its `QQmlEngine` does, so `scripts/run-shell.sh` sets it (Task 1 proves this on the target).
+CLI: `qs -c mat-shell` (or `-p <dir>`) starts the shell; `qs -c mat-shell ipc call <target> <fn> [args]`, `qs -c mat-shell ipc show`, `qs -c mat-shell log -f`. Quickshell itself does not read `QML_IMPORT_PATH`, but its `QQmlEngine` does, so `scripts/run-shell.sh` sets it (Task 11 (runtime spike) proves this on the target).
 
 Anything not in this table needs a versioned doc link in your hand-off before you use it.
 
@@ -144,11 +147,14 @@ Anything not in this table needs a versioned doc link in your hand-off before yo
 
 ## 6. Definition of Done (tick every line in the hand-off)
 
-- [ ] Only the task's listed files changed; generated files were regenerated, not edited.
-- [ ] The task's tests were written first and seen failing; now `node --test tests/lib/` passes.
+`python3 scripts/task-gate.py N` checks the first four lines mechanically; the rest are yours.
+
+- [ ] Only the task's listed files changed (`python3 scripts/check-scope.py --task N` passes); generated files were regenerated, not edited.
+- [ ] No locked test changed (`python3 scripts/test-lock.py --check` passes); new tests were locked with `--update` when the task was sealed.
+- [ ] The task's tests were written first and seen failing; now `node --test "tests/lib/*.test.mjs"` passes.
 - [ ] `python3 scripts/lint-shell.py` reports zero unsuppressed findings; each suppression cites a spec section.
 - [ ] `./scripts/verify-design-system.sh` prints `ALL CHECKS PASSED`.
 - [ ] QML tasks: `./scripts/smoke-shell.sh` passes on the Linux target, and the task's manual checks were done with the results listed.
-- [ ] Every name matches `02-contracts.md`; every Quickshell API is in §5 or cited.
+- [ ] Every name matches `02-contracts.md` (G21 passes); non-contract members start with `_`; every Quickshell API is in §5 or cited.
 - [ ] Keyboard path, `Accessible.name`, focus ring, and Reduced Motion behaviour were checked for every new interactive element.
 - [ ] No R-rule broken; conflicts met are listed by C-id.

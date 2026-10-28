@@ -1,0 +1,35 @@
+# matugen configuration for the Material 3 Expressive Quickshell DE (requires matugen >= 4.0)
+#
+# Install:  automatic. ThemeService seeds $XDG_CONFIG_HOME/mat-shell/matugen/ (default ~/.config/mat-shell/matugen/)
+#           from the shell's copy of this folder, rewriting every ~/.config/mat-shell path to the real
+#           config folder (paths.rebaseMatugenConfig). Edits to the seeded copy are kept.
+# Generate: matugen image <wallpaper> -c ~/.config/mat-shell/matugen/config.toml \
+#             -t <Tokens.schemeVariant> --source-color-index 0 [--contrast 0.5|1.0]
+#
+# The template writes BOTH polarities, so the shell switches Dark/Light without re-running matugen.
+# Pass -m dark|light only for other app templates you add (GTK, terminal) that use `.default`.
+
+[config]
+version_check = false
+
+# Quickshell runs matugen without a terminal. When an image yields several candidate colours, matugen 4.x
+# otherwise exits with "Multiple source colors found ... a terminal was not detected" (the theme never updates).
+# Config key needs matugen >= 4.2; ThemeService also passes --source-color-index 0 for 4.0 / 4.1.
+source_color_index = 0
+
+# Used when an image has no usable colour (grayscale screenshots, flat black wallpapers)
+fallback_color = "#6750A4"
+
+# Status colours, harmonized toward the wallpaper hue. matugen builds each one through the active scheme
+# variant; ColorTokens swaps to fixed hues under scheme-monochrome / scheme-neutral, which drain them to gray.
+# The privacy indicator is deliberately NOT generated here: it stays a fixed green in every scheme.
+[config.custom_colors]
+success = { color = "#1E8E3E", blend = true }
+warning = { color = "#F9A825", blend = true }
+
+# No [config.wallpaper] section on purpose: the shell sets the wallpaper itself (swww grow transition from
+# the clicked Theme Studio card). Adding one here would set the wallpaper twice with clashing transitions.
+
+[templates.mat-shell-theme]
+input_path = "~/.config/mat-shell/matugen/theme.json.tpl"
+output_path = "~/.config/mat-shell/theme.json"
